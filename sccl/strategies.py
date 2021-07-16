@@ -28,15 +28,17 @@ def _solve_and_log(encoding, instance, logging):
 
     return result
 
-def solve_instance(topology, collective, instance, logging = False):
+def solve_instance(topology, collective, instance, logging = False, heuristic = False):
     encoding = PathEncoding(topology, collective)
+    encoding.add_heuristic(heuristic)
     return _solve_and_log(encoding, instance, logging)
 
-def solve_least_steps(topology, collective, initial_steps = 1, base_instance = Instance(None), logging = False):
+def solve_least_steps(topology, collective, initial_steps = 1, base_instance = Instance(None), logging = False, heuristic = False):
     if initial_steps < 1:
         raise ValueError('initial_steps must be strictly positive')
 
     encoding = PathEncoding(topology, collective)
+    encoding.add_heuristic(heuristic)
 
     # Lower bound the number of steps required
     steps_lb = lower_bound_steps(topology, collective)
@@ -70,7 +72,7 @@ def solve_least_steps(topology, collective, initial_steps = 1, base_instance = I
         else:
             num_steps += 1
 
-def solve_all_latency_bandwidth_tradeoffs(topology, collective, min_chunks = 1, max_chunks = None, assume_rounds_per_chunk_lb = None, assume_monotonic_feasibility = False, base_instance = Instance(None), logging = False):
+def solve_all_latency_bandwidth_tradeoffs(topology, collective, min_chunks = 1, max_chunks = None, assume_rounds_per_chunk_lb = None, assume_monotonic_feasibility = False, base_instance = Instance(None), logging = False, heuristic = False):
     if min_chunks < 1:
         raise ValueError('min_chunks must be strictly positive.')
     if max_chunks != None and max_chunks < min_chunks:
@@ -101,6 +103,7 @@ def solve_all_latency_bandwidth_tradeoffs(topology, collective, min_chunks = 1, 
     algorithms = []
     for chunks in chunks_iter:
         encoding = PathEncoding(topology, collective)
+        encoding.add_heuristic(heuristic)
         rounds_lb = math.ceil(rounds_per_chunk_lb * chunks)
 
         rounds = rounds_lb - 1
