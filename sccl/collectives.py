@@ -110,8 +110,10 @@ def gather(num_nodes, root):
 def allgather(num_nodes):
     return build_collective(f'Allgather(n={num_nodes})', num_nodes, num_nodes, _scattered(num_nodes), _all)
 
-def alltoall(num_nodes):
-    return build_collective(f'Alltoall(n={num_nodes})', num_nodes, num_nodes * num_nodes, _scattered(num_nodes), _transpose(num_nodes))
+def alltoall(num_nodes, chunks=-1):
+    if chunks == -1:
+        chunks = num_nodes * num_nodes
+    return build_collective(f'Alltoall(n={num_nodes})', num_nodes, chunks, _scattered(num_nodes), _transpose(num_nodes))
 
 # Combining collectives
 

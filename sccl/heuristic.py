@@ -12,3 +12,5 @@ class Heuristic:
                 for c2 in range(c1+1, collective.num_chunks):
                     s.add(Implies(And(send(c1, src, dst), send(c2, src, dst)),
                                     start(c1, dst) == start(c2, dst)))
+
+    

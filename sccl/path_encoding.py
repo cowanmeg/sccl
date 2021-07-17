@@ -194,6 +194,7 @@ class PathEncodingBase(object):
 
     def solve(self, instance):
         chunked = self.collective.chunk_up(instance.chunks)
+        print(f'Total chunks {self.collective.num_chunks}')
 
         solver = Solver()
         self._encode(solver, instance, chunked)
