@@ -61,6 +61,7 @@ class SCCLProgram:
         if _current_program != None:
             raise RuntimeError("There is already a SCCL Program in context")
         _current_program = self
+        return self
     
     def __exit__(self, exc_type, exc_value, exc_traceback):
         global _current_program
@@ -418,6 +419,9 @@ class Chunk:
     def __lt__(self, other):
         return self.origin_rank < other.origin_rank or \
                (self.origin_rank == other.origin_rank and self.origin_index < other.origin_index)
+
+    def __hash__(self):
+        return hash((self.origin_rank, self.origin_index))
 
 @dataclass
 class ReduceChunk:

@@ -32,11 +32,12 @@ def solve_instance(topology, collective, instance, logging = False):
     encoding = PathEncoding(topology, collective)
     return _solve_and_log(encoding, instance, logging)
 
-def solve_least_steps(topology, collective, initial_steps = 1, base_instance = Instance(None), logging = False):
+def solve_least_steps(topology, collective, initial_steps = 1, base_instance = Instance(None), logging = False, encoding=None):
     if initial_steps < 1:
         raise ValueError('initial_steps must be strictly positive')
 
-    encoding = PathEncoding(topology, collective)
+    if encoding is None:
+        encoding = PathEncoding(topology, collective)
 
     # Lower bound the number of steps required
     steps_lb = lower_bound_steps(topology, collective)

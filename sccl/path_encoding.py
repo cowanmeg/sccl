@@ -7,7 +7,7 @@ from z3 import *
 
 from collections import defaultdict
 
-def _start(chunk, rank):
+def start(chunk, rank):
     return Int(f'start_{chunk}_at_{rank}')
 
 def _end(chunk, rank):
@@ -16,12 +16,12 @@ def _end(chunk, rank):
 def _rounds(step):
     return Int(f'rounds_{step}')
 
-def _send(chunk, src, dst):
+def send(chunk, src, dst):
     return Bool(f'send_{chunk}_from_{src}_to_{dst}')
 
 def _sent_in(chunk, src, dst, step):
     # Constructs a Z3 term that is true iff a chunk is sent from src to dst in step
-    return And(_send(chunk, src, dst), _start(chunk, dst) == step + 1)
+    return And(send(chunk, src, dst), start(chunk, dst) == step + 1)
 
 def _idx(addr, rank):
     return Int(f'idx_{addr}_at_{rank}')
@@ -36,6 +36,7 @@ class PathEncodingBase(object):
     def __init__(self, topology, collective):
         self.topology = topology
         self.collective = collective
+        self.solver = Solver()
 
     def _encode(self, s, instance, collective):
         # Calculate how much iterations of the algorithm overlap if pipelining is specified
@@ -53,39 +54,39 @@ class PathEncodingBase(object):
                 if collective.precondition(rank, chunk):
                     # Have chunks start on their starting ranks before the first step
                     # This is not required for the encoding, but makes debugging the models produced more intuitive
-                    s.add(_start(chunk, rank) == 0)
+                    s.add(start(chunk, rank) == 0)
                 else:
                     # Any rank that gets a chunk (and doesn't start with it) must have a unique source for it
-                    sent_once = PbEq([(_send(chunk, src, rank), 1) for src in self.topology.sources(rank)], 1)
-                    s.add(Implies(_start(chunk, rank) <= instance.steps, sent_once))
+                    sent_once = PbEq([(send(chunk, src, rank), 1) for src in self.topology.sources(rank)], 1)
+                    s.add(Implies(start(chunk, rank) <= instance.steps, sent_once))
                 # If the postcondition requires the chunk on the rank then it must start being there before the end
                 if collective.postcondition(rank, chunk):
-                    s.add(_start(chunk, rank) <= instance.steps)
+                    s.add(start(chunk, rank) <= instance.steps)
                 for src in self.topology.sources(rank):
                     # If a rank send a chunk then it needs to have it before sending it
-                    s.add(Implies(_send(chunk, src, rank), _start(chunk, src) < _start(chunk, rank)))
+                    s.add(Implies(send(chunk, src, rank), start(chunk, src) < start(chunk, rank)))
                     if instance.extra_memory != None:
                         # Also to send a chunk it needs to not have been deleted before sending it
-                        s.add(Implies(_send(chunk, src, rank), _end(chunk, src) >= _start(chunk, rank) - 1))
+                        s.add(Implies(send(chunk, src, rank), _end(chunk, src) >= start(chunk, rank) - 1))
                     # Handle chunks at the same address getting reduced in combining collectives
                     if collective.is_combining:
                         for other in collective.chunks():
                             if other != chunk and collective.address(other) == collective.address(chunk):
                                 # If you send and another chunk at the same address is available (i.e. reduced) then you have to send that too at the same time
-                                s.add(Implies(And(_send(chunk, src, rank), _start(other, src) < _start(chunk, rank)),
-                                                And(_send(other, src, rank), (_start(other, rank) == _start(chunk, rank)))))
+                                s.add(Implies(And(send(chunk, src, rank), start(other, src) < start(chunk, rank)),
+                                                And(send(other, src, rank), (start(other, rank) == start(chunk, rank)))))
 
                     # Handle the triggers used in subproblem based synthesizers
                     if collective.trigger(rank, chunk) != None:
                         # When receiving a chunk with a trigger, the triggering chunk must be sent at the same time
                         trigger = collective.trigger(rank, chunk)
-                        s.add(Implies(_send(chunk, src, rank),
-                            And(_send(trigger, rank, src), _start(trigger, src) == _start(chunk, rank))))
+                        s.add(Implies(send(chunk, src, rank),
+                            And(send(trigger, rank, src), start(trigger, src) == start(chunk, rank))))
                     if collective.trigger(src, chunk) != None:
                         # When sending a chunk with a trigger, the triggering chunk must be received at the same time
                         trigger = collective.trigger(src, chunk)
-                        s.add(Implies(_send(chunk, src, rank),
-                            And(_send(trigger, rank, src), _start(trigger, src) == _start(chunk, rank))))
+                        s.add(Implies(send(chunk, src, rank),
+                            And(send(trigger, rank, src), start(trigger, src) == start(chunk, rank))))
 
         # Rounds
         # Each step must use at least one round of bandwidth
@@ -129,7 +130,7 @@ class PathEncodingBase(object):
                         s.add(_end(chunk, rank) > instance.steps)
                     else:
                         # On other ranks the chunk can stop being on the rank any time after its start
-                        s.add(_end(chunk, rank) >= _start(chunk, rank))
+                        s.add(_end(chunk, rank) >= start(chunk, rank))
 
             for rank in collective.ranks():
                 # Figure out all addresses plus which ones weill be in the input and output buffers
@@ -144,7 +145,7 @@ class PathEncodingBase(object):
                     if collective.postcondition(rank, chunk):
                         output_addresses.add(addr)
                     # Enforce the address start-end intervals to contain all the chunk start-end intervals
-                    s.add(_addr_start(addr, rank) <= _start(chunk, rank))
+                    s.add(_addr_start(addr, rank) <= start(chunk, rank))
                     s.add(_addr_end(addr, rank) >= _end(chunk, rank))
 
                 # Statically allocate indices for addresses in the input and output buffers
@@ -192,7 +193,9 @@ class PathEncodingBase(object):
     def solve(self, instance):
         chunked = self.collective.chunk_up(instance.chunks)
 
-        solver = Solver()
+        # solver = Solver()
+        solver = self.solver
+        
         self._encode(solver, instance, chunked)
         if solver.check() == sat:
             model = solver.model()
@@ -204,9 +207,9 @@ class PathEncodingBase(object):
                 for dst in chunked.ranks():
                     for src in self.topology.sources(dst):
                         # Check if the send of chunk from src to dst happens
-                        if is_true(model.eval(_send(chunk, src, dst))):
+                        if is_true(model.eval(send(chunk, src, dst))):
                             # Find which step it happens on (the step before it starts on the destination)
-                            step = model.eval(_start(chunk, dst)).as_long() - 1
+                            step = model.eval(start(chunk, dst)).as_long() - 1
                             # Filter out "phantom" sends that happen outside the algorithm
                             if 0 <= step and step < instance.steps:
                                 send_sets[step].add((addr, src, dst))
