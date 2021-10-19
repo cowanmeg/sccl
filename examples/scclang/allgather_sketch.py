@@ -59,7 +59,8 @@ def allgather_ring_last_2steps_hole(size):
             # Removed the last 2 steps of the ring replaced with (next, nex+1)
             options = [(next + 1) % size, next]
             c = c.send(options, buffer=Buffer.output, index=r)
-            options2 = [(next + 1) % size, next, 0]
+            options2 = [0, next, (next + 1) % size]
+            print(options2)
             c.send(options2, buffer=Buffer.output, index=r)
 
         sketch.synthesize()

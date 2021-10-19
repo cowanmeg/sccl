@@ -88,6 +88,9 @@ class SymbolicRef(ChunkRef):
         # Change dst into a list if a scalar is given 
         if type(dst) is not list:
             dst = [dst]
+        else: # Just in case there are duplicate destinations in this path
+            dst_set = set(dst)
+            dst = list(dst_set)
         return self.sketch.send(self, dst, buffer, index, self.size)
 
     def reduce(self, dst, buffer, index=-1, sendtb=-1, recvtb=-1, ch=0):
@@ -196,19 +199,28 @@ class ChunkDAG:
         for chunk, op in self.chunk_paths.items():
             # TODO: SCCLang chunk -> SCCL chunk id
             chunk_id = chunk.origin_rank
-            src = chunk.origin_rank
+            src = [chunk.origin_rank]
             frontier = op.next
 
             while len(frontier) > 0:
                 op = frontier[0]
                 dst = op.ref.rank
-                if len(dst) == 1:
-                    dst = dst[0]
-                    s.add(send(chunk_id, src, dst) == True)
-                    s.add(start(chunk_id, dst) == op.steps)
+                step = op.steps
+                # Concrete source
+                if len(src) == 1:
+                    # Concrete source -> concrete destination
+                    if len(dst) == 1:
+                        s.add(send(chunk_id, src, dst[0]) == True)
+                        s.add(start(chunk_id, dst[0]) == step)
+                    # Concrete source -> symbolic destination
+                    else:
+                        opts = [And(send(chunk_id, src, d), start(chunk_id, d) == step) for d in dst]
+                        s.add(Xor(*opts))
+                # Symbolic source -> symbolic/concrete destination
                 else:
-                    variables = [And(send(chunk_id, src, d), start(chunk_id, d) == op.steps) for d in dst]
-                    s.add(Xor(*variables))
+                    for src_opt in src:
+                        implication_opts = [And(send(chunk_id, src_opt, d), start(chunk_id, d) == step) for d in dst]
+                        s.add(Implies(start(chunk_id, src_opt) == step-1, Xor(*implication_opts)))
                 src = dst
                 frontier = frontier[1:] + op.next
 
