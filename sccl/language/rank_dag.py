@@ -29,6 +29,9 @@ def remove_op(op):
 def same_tb(op1, op2):
     return op1.tb == op2.tb
 
+def same_chan(op1, op2):
+    return op1.channel == op2.channel and op1.channel > 0
+
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
     
@@ -90,8 +93,8 @@ class RankDAG:
             frontier = frontier[1:] + list(op.next)   
         return last_ops
 
-    def add_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch, num=0):
+        op = Op(Instruction.copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch, num=num)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -121,8 +124,8 @@ class RankDAG:
                 prev_op.next.add(op)
                 op.prev.add(prev_op)
 
-    def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_reduce(self, rank, send_ref, recv_ref, step, priority, tb, ch, num=0):
+        op = Op(Instruction.reduce, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch, num=num)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
         srcbuffer = send_ref.buffer
@@ -150,8 +153,8 @@ class RankDAG:
                 prev_op.next.add(op)
                 op.prev.add(prev_op)
 
-    def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_send(self, rank, send_ref, recv_ref, step, priority, tb, ch, num=0):
+        op = Op(Instruction.send, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch, num=num)
         buffer = send_ref.buffer
         index = send_ref.index
         size = send_ref.size
@@ -167,8 +170,8 @@ class RankDAG:
                 op.prev.add(prev_op)
         return op
 
-    def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.recv, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_recv(self, rank, send_ref, recv_ref, step, priority, tb, ch, num=0):
+        op = Op(Instruction.recv, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch, num=num)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
@@ -187,8 +190,8 @@ class RankDAG:
                     op.prev.add(prev_op)
         return op
 
-    def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch):
-        op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch)
+    def add_recv_reduce_copy(self, rank, send_ref, recv_ref, step, priority, tb, ch, num=0):
+        op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, chunk_step=step, priority=priority, next=set(), prev=set(), tb=tb, channel=ch, num=num)
         buffer = recv_ref.buffer
         index = recv_ref.index
         size = recv_ref.size
@@ -243,12 +246,13 @@ class RankDAG:
             while len(frontier) > 0:
                 op = frontier[0]
                 for next_op in op.next:
-                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
+                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) \
+                    and same_count(op, next_op) and same_buf_dst(op, next_op) and same_chan(op, next_op):
                         op.inst = Instruction.recv_copy_send
                         op.dst = next_op.dst
                         op.match = next_op.match
-                        for op in op.match:
-                            op.chunk_step -= 1
+                        # op.chunk_step = next_op.chunk_step
+                        op.priority = next_op.priority
                         remove_op(next_op)
                         break
                 frontier = frontier[1:] + op.next
@@ -266,13 +270,17 @@ class RankDAG:
                         if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst == Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
                             op.inst = Instruction.recv_reduce_send
                             op.dst = next_op.dst
-                            op.match = op.match + next_op.match
+                            op.match = next_op.match
+                            op.chunk_step = next_op.chunk_step
+                            op.priority = next_op.priority
                             remove_op(next_op)
                     
                     if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
                         op.inst = Instruction.recv_reduce_copy_send
                         op.dst = next_op.dst
-                        op.match = op.match + next_op.match
+                        op.match = next_op.match
+                        op.chunk_step = next_op.chunk_step
+                        op.priority = next_op.priority
                         remove_op(next_op)
                 frontier = frontier[1:] + op.next
 

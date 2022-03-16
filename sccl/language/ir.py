@@ -127,7 +127,7 @@ class Op:
     num: int = -1
     chunk_step: int = -1
     priority: int = -1
-    match: list = field(default_factory=list) # This should be another Op
+    match: list = None # For send type operations this is the matching receive.
     channel: int = -1
 
     def cnt(self):

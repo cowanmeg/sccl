@@ -5,7 +5,7 @@ from lxml import etree as ET
 from collections import defaultdict
 from dataclasses import dataclass, field, replace
 import math
-import threading, queue, itertools, bisect
+import threading, queue
 from enum import Enum
 from z3 import *
 
@@ -13,31 +13,61 @@ from sccl.language.ir import *
 from sccl.language import *
 import sccl.language.collectives as lang_collectives
 
-class ChannelPolicy(Enum):
-    One = 'One'
-    MatchTopology = 'MatchTopology'
-
-    def __str__(self):
-        return self.value
 
 @dataclass
-class CopyOp:
-    src_buf: Buffer
-    src_off: int
-    dst_buf: Buffer
-    dst_off: int
-    cnt: int
+class _Gpu:
+    copies: list
+    inputs: dict
+    outputs: dict
+    input_chunks: int
+    output_chunks: int
+    scratch: dict = field(default_factory=dict)
+    threadbloks: list = field(default_factory=list)
 
-def get_buffer_and_offset(gpu, addr):
-    # Map an address to one of the named buffers
-    if addr in gpu.inputs:
-        return Buffer.input, gpu.inputs[addr]
-    elif addr in gpu.outputs:
-        return Buffer.output, gpu.outputs[addr]
-    elif addr in gpu.scratch:
-        return Buffer.scratch, gpu.scratch[addr]
-    else:
-        raise RuntimeError('Address is not mapped to a buffer')
+    def scratch_size(self):
+        return max((idx for addr, idx in self.scratch.items()), default=-1) + 1
+
+@dataclass
+class _Threadblock:
+    channel: int
+    rbid: int = None
+    send: int = -1
+    recv: int = -1
+    steps: list = field(default_factory=list)
+    # The steps may expand into multiple operations here
+    ops: list = field(default_factory=list)
+
+@dataclass
+class _Copy:
+    input_offset: int
+    output_offset: int
+
+@dataclass
+class _Op:
+    gpu: int
+    peer: int
+    step: int
+    is_send: bool
+    op_type: str
+    src_buffer: str
+    src_offset: int
+    dst_buffer: str
+    dst_offset: int
+    cnt: int
+    depends: list
+    block_rbid: int = None
+    # idx is the NCCL XML step index, which may not be the same as the algorithm step index
+    idx: int = None
+    has_dependence: bool = False
+
+    def __eq__(self, other):
+        return self is other
+
+    def __hash__(self):
+        return id(self)
+
+# Poor hack
+is_reduce = False 
 
 def _analyze_liveness(gpus, algorithm):
     # Initialize liveness intervals for buffers on each GPU
@@ -45,11 +75,14 @@ def _analyze_liveness(gpus, algorithm):
     output_livenesses = {rank: [[(math.inf,math.inf)] for _ in range(gpu.output_chunks)] for rank, gpu in gpus.items()}
     scratch_livenesses = {rank: [[(math.inf,-1)] for addr, idx in gpu.scratch.items()] for rank, gpu in gpus.items()}
 
+    # For copies reserve the index in the output buffer from the very beginning
+    for rank, gpu in gpus.items():
+        for copy in gpu.copies:
+            output_livenesses[rank][copy.output_offset] = [(-1,math.inf)]
+
     def update_liveness(rank, addr, step_idx):
         gpu = gpus[rank]
         # Find the relevant buffer and livenesses for the address
-        # Addresses in both input and output are treated as input (as currently postcopies are inserted).
-        # TODO: This is a bit dangerous, as changing the other bit of code to do precopies would silently break this.
         if addr in gpu.inputs:
             buffer = gpu.inputs
             liveness = input_livenesses[rank]
@@ -69,9 +102,18 @@ def _analyze_liveness(gpus, algorithm):
 
     # For each step of the algorithm, update liveness intervals for all buffers
     for step_idx, step in enumerate(algorithm.steps):
-        for addr, src, dst in step.sends:
-            update_liveness(src, addr, step_idx)
-            update_liveness(dst, addr, step_idx)
+        if len(step.sends[0]) == 5:
+            for addr, src, dst, _, _ in step.sends:
+                update_liveness(src, addr, step_idx)
+                update_liveness(dst, addr, step_idx)
+        elif len(step.sends[0]) == 6:
+            for addr, src, dst, _, _, _ in step.sends:
+                update_liveness(src, addr, step_idx)
+                update_liveness(dst, addr, step_idx)
+        else:
+            for addr, src, dst in step.sends:
+                update_liveness(src, addr, step_idx)
+                update_liveness(dst, addr, step_idx)
     
     return (input_livenesses, output_livenesses, scratch_livenesses)
 
@@ -186,92 +228,120 @@ def _remap_scratch_into_input_output(liveness, gpus, logging):
         max_scratch_overhead = max(gpu.scratch_size() / (gpu.input_chunks + gpu.output_chunks) for gpu in gpus.values())
         print(f'Maximum scratch overhead is {max_scratch_overhead * 100:.0f}%')
 
-def _greedy_scratch_sort(algorithm, gpus):
-    # Sort scratch mappings in an attempt to make more of them contiguous (this is of course a heuristic).
-    # The procedure first figures out the sets of addresses that would result in combined operations if
-    # the source and destination indices were contiguously allocated. These are then greedily allocated
-    # starting with the largest sets. Afterwards any remaining scratch mappings are allocated in order.
-    tosort = { rank: set(gpu.scratch.keys()).union(gpu.inputs.keys()).union(gpu.outputs.keys()) for rank, gpu in gpus.items() }
-    csets = defaultdict(set)
-    for idx, step in enumerate(algorithm.steps):
-        for addr, src, dst in step.sends:
-            if addr in tosort[src] and addr in tosort[dst]:
-                csets[(idx, src, dst)].add(addr)
-    for gpu in gpus.values():
-        gpu.scratch = {}
-    for key in sorted(csets, key=lambda x: len(csets[x]), reverse=True):
-        idx, src, dst = key
-        cset = csets[key]
+def _allocate_channels_max_concurrency(op_sets, logging):
+    # This function solves a coloring problem to ops to a minimal set of channels
+    ctx = Context()
 
-        def contiguous_in(buffer):
-            if not cset.issubset(buffer.keys()):
-                return False
-            for i in range(1, len(addrs)):
-                if buffer[addrs[i]] != buffer[addrs[i-1]] + 1:
-                    return False
-            return True
-        
-        # Check if either side is already contiguous
-        addrs = sorted(cset)
-        src_input_contig = contiguous_in(gpus[src].inputs)
-        skip_src = src_input_contig or contiguous_in(gpus[src].outputs) or contiguous_in(gpus[src].scratch)
-        dst_input_contig = contiguous_in(gpus[dst].inputs) 
-        skip_dst = dst_input_contig or contiguous_in(gpus[dst].outputs) or contiguous_in(gpus[dst].scratch)
+    def chan(idx):
+        return Int(f'chan_{idx}', ctx=ctx)
+    max_channels = Int('max_channels', ctx=ctx)
 
-        if (cset.issubset(tosort[src]) or skip_src) and (cset.issubset(tosort[dst]) or skip_dst):
-            # Block these addresses from being sorted again on both GPUs
-            tosort[src].difference_update(cset)
-            tosort[dst].difference_update(cset)
+    constraints = []
 
-            for addr in addrs:
-                def alloc(rank, skip, prefer_input):
-                    gpu = gpus[rank]
-                    if skip:
-                        # If not allocating in scratch, check if we need to make a copy and do a precopy if that allows
-                        # maintaining contiguity.
-                        if addr in gpu.inputs and addr in gpu.outputs:
-                            op = CopyOp(Buffer.input, gpu.inputs[addr], Buffer.output, gpu.outputs[addr], 1)
-                            if prefer_input:
-                                gpu.postcopies.append(op)
-                                del gpu.outputs[addr]
-                            else:
-                                gpu.precopies.append(op)
-                                del gpu.inputs[addr]
-                    else:
-                        # Reallocate address in scratch and insert necessary copies for input/output addresses
-                        gpu.scratch[addr] = len(gpu.scratch)
-                        if addr in gpu.inputs:
-                            op = CopyOp(Buffer.input, gpu.inputs[addr], Buffer.scratch, gpu.scratch[addr], 1)
-                            gpu.precopies.append(op)
-                            del gpu.inputs[addr]
-                        if addr in gpu.outputs:
-                            op = CopyOp(Buffer.scratch, gpu.scratch[addr], Buffer.output, gpu.outputs[addr], 1)
-                            gpu.postcopies.append(op)
-                            del gpu.outputs[addr]
-                alloc(src, skip_src, src_input_contig)
-                alloc(dst, skip_dst, dst_input_contig)
+    # Add basic constraints and find conflicting sets of operations
+    conflict_groups = defaultdict(set)
+    for idx, op_set in enumerate(op_sets):
+        for op in op_set:
+            # Two operations conflict if they use the same src-dst edge on the same step
+            conflict_groups[(op.gpu, op.is_send, op.peer, op.step)].add(idx)
+        constraints.append(chan(idx) >= 0)
+        constraints.append(chan(idx) < max_channels)
 
-    # Allocate any remaining addresses that aren't already input or output
-    for rank in tosort:
-        gpu = gpus[rank]
-        for addr in sorted(tosort[rank]):
-            if not addr in gpu.inputs and not addr in gpu.outputs:
-                gpu.scratch[addr] = len(gpu.scratch)
+    # Require channels within the conflict groups to be disjoint
+    for grp in conflict_groups.values():
+        constraints.append(Distinct([chan(idx) for idx in grp]))
 
-def instance_metadata(gpus, instances):
-    for rank, gpu in gpus.items():
-            # Multiply metadata with instances
-            def expand_mappings(mappings):
-                return { addr * instances + i: idx * instances + i for addr, idx in mappings.items() for i in range(instances) }
-            gpu.inputs = expand_mappings(gpu.inputs)
-            gpu.outputs = expand_mappings(gpu.outputs)
-            gpu.input_chunks *= instances
-            gpu.output_chunks *= instances
-            gpu.scratch = expand_mappings(gpu.scratch)
+    opt = Optimize(ctx=ctx)
+    opt.add(constraints)
+    opt.minimize(max_channels)
+    
+    t = threading.Thread(target=opt.check)
+    t.start()
+    t.join(1)
+    main_ctx().interrupt()
+    t.join()
 
-def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, 
-        use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False,
-        instr_fusion=True):
+    try:
+        model = opt.model()
+    except Z3Exception:
+        # TODO: This altenate process does not guarantee that channels are contiguous
+        s = Solver(ctx=ctx)
+        s.add(constraints)
+        s.check()
+        model = s.model()
+            
+    if logging:
+        print(f'Using up to {model[max_channels].as_long()} channels')
+
+    # Group the operations by which channels they use
+    ops_by_channel = defaultdict(list)
+    for idx, op_set in enumerate(op_sets):
+        ops = ops_by_channel[model[chan(idx)].as_long()]
+        ops.extend(op_set)
+
+    return ops_by_channel
+
+def _is_relay_link(topology, src, dst):
+    if "copies" in topology.name:
+        num_copies = topology.name.split(",")[1].strip(")")
+        copies = int(num_copies[7:])
+    else:
+        copies = 1
+    num_local = len(topology.links) // copies
+    if src // num_local != dst // num_local:
+        return True
+    return False
+
+def _allocate_channels_match_topology(op_sets, topology, instances, scale_remote, logging):
+    if len(topology.switches) > 0 and logging:
+        print('Warning: Switches in the topology are ignored for the channel policy MatchTopology.')
+    # print(topology)
+    ops_by_channel = defaultdict(list)
+    next_channel = defaultdict(lambda: 0)
+    for send in op_sets:
+        # send = op_set[0]
+        assert send.inst == Instruction.send
+        src = send.rank
+        dst = send.dst.rank
+        ops_by_channel[next_channel[(src,dst)]].append(send)
+        link = topology.link(src,dst) * instances    
+        global is_reduce
+        if is_reduce and ("DGX1" in topology.name or "DGX2RFix" in topology.name):
+            if link == 0:
+                print(f"link {src}->{dst} was 0. Making it {topology.link(dst,src)}")
+                topology.links[dst][src] = topology.links[src][dst]
+                link = topology.link(src,dst)
+                # topology.link(src,dst) = topology.link(dst,src)
+                assert link > 0
+        else:
+            assert link > 0, 'Encountered send on non-existent link'
+        if _is_relay_link(topology, src, dst):
+            link = link * scale_remote
+        next_channel[(src,dst)] = (next_channel[(src,dst)] + 1) % link
+
+    return ops_by_channel
+
+class ChannelPolicy(Enum):
+    One = 'One'
+    MaxConcurrency = 'MaxConcurrency'
+    MatchTopology = 'MatchTopology'
+
+    def __str__(self):
+        return self.value
+
+
+def get_buffer_and_offset(gpu, addr):
+    # Map an address to one of the named buffers
+    if addr in gpu.inputs:
+        return Buffer.input, gpu.inputs[addr]
+    elif addr in gpu.outputs:
+        return Buffer.output, gpu.outputs[addr]
+    elif addr in gpu.scratch:
+        return Buffer.scratch, gpu.scratch[addr]
+    else:
+        raise RuntimeError('Address is not mapped to a buffer')
+
+def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, old_format=False, use_scratch=False, merge_contiguous=True, instances=1, scale_remote=1, combine_contig=False, add_time_deps=False, aid_IB_contig=False, prefix="", logging=False):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 
@@ -285,7 +355,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     precondition, postcondition or neither. For addresses that would be in both the input and output buffers <copy/>
     tags are created to mark an initial transfer to the output buffer and only the output buffer mapping is kept.
     '''
-
+    sccl_in = instances
+    instances=1
     if algorithm.is_pipelined():
         raise ValueError('Pipelining is not supported.')
 
@@ -304,59 +375,76 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         if rank in algorithm.output_map:
             outputs.update({ addr: idx for idx, addr in enumerate(sorted(algorithm.output_map[rank])) })
         inputs = {}
+        copies = []
         if rank in algorithm.input_map:
-            inputs.update({ addr: idx for idx, addr in enumerate(sorted(algorithm.input_map[rank])) })
-        gpus[rank] = Gpu(rank, [], [], [], inputs, outputs, len(inputs), len(outputs))
+            for idx, addr in enumerate(sorted(algorithm.input_map[rank])):
+                if addr in outputs:
+                    # copies.append(_Copy(idx, outputs[addr]))
+                    src = ChunkRef(rank, Buffer.input, idx, 1)
+                    dst = ChunkRef(rank, Buffer.output, outputs[addr], 1)
+                    copies.append(Op(Instruction.copy, rank, src, dst))
+                else:
+                    inputs[addr] = idx
+        # gpus[rank] = _Gpu(copies, inputs, outputs, len(inputs) + len(copies), len(outputs))
+        gpus[rank] = Gpu(rank, precopies=copies, inputs=inputs, outputs=outputs, input_chunks=len(inputs) + len(copies), output_chunks=len(outputs))
 
     # Create scratch buffer mappings if necessary
     def allocate_scratch(gpu, addr):
         if not (addr in gpu.inputs or addr in gpu.outputs or addr in gpu.scratch):
             offset = len(gpu.scratch)
             gpu.scratch[addr] = offset
-    for step in algorithm.steps:
-        for addr, src, dst in step.sends:
-            allocate_scratch(gpus[src], addr)
-            allocate_scratch(gpus[dst], addr)
 
+    # longest_relay = [0]*len(algorithm.steps)
+    # for i, step in enumerate(algorithm.steps):
+    #     if len(step.sends[0]) == 5:
+    #         for addr, src, dst, _, _ in step.sends:
+    #             if _is_relay_link(algorithm.topology,src,dst):
+    #                 longest_relay[i] += 1
+
+    if aid_IB_contig:
+        # first add scratch for relay sends only
+        for step in algorithm.steps:
+        # for s, cnt1 in sorted(list(enumerate(longest_relay)), key=lambda x:x[1], reverse=True):
+            # step = algorithm.steps[s]
+            if len(step.sends[0]) == 5:
+                for addr, src, dst, _, _ in step.sends:
+                    if _is_relay_link(algorithm.topology,src,dst):
+                        allocate_scratch(gpus[src], addr)
+                        allocate_scratch(gpus[dst], addr)
+            elif len(step.sends[0]) == 6:
+                for addr, src, dst, _, _, _ in step.sends:
+                    if _is_relay_link(algorithm.topology,src,dst):
+                        allocate_scratch(gpus[src], addr)
+                        allocate_scratch(gpus[dst], addr)
+            else:
+                for addr, src, dst in step.sends:
+                    if _is_relay_link(algorithm.topology,src,dst):
+                        allocate_scratch(gpus[src], addr)
+                        allocate_scratch(gpus[dst], addr)
+
+    # next add for remaining steps
+    for step in algorithm.steps:
+        if len(step.sends[0]) == 5:
+            for addr, src, dst, _, _ in step.sends:
+                allocate_scratch(gpus[src], addr)
+                allocate_scratch(gpus[dst], addr)
+        elif len(step.sends[0]) == 6:
+            for addr, src, dst, _, _, _ in step.sends:
+                allocate_scratch(gpus[src], addr)
+                allocate_scratch(gpus[dst], addr)
+        else:
+            for addr, src, dst in step.sends:
+                allocate_scratch(gpus[src], addr)
+                allocate_scratch(gpus[dst], addr)
+
+    # Analyze liveness of indices in buffers and remap scratch into input/output as possible
     if remap_scratch:
-        # Analyze liveness of indices in buffers and remap scratch into input/output as possible
         liveness = _analyze_liveness(gpus, algorithm)
         _remap_scratch_into_input_output(liveness, gpus, logging)
-    elif greedy_scratch_sorting:
-        _greedy_scratch_sort(algorithm, gpus)
-    else:
-        # Sort scratch mappings in an attempt to make more of them contiguous (this is of course a heuristic).
-        for gpu in gpus.values():
-            gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
 
-    # Sort and combine contiguous copy operations
-    for rank, gpu in gpus.items():
-        def combine_copies(copies):
-            copies.sort(key=lambda x: (x.src_buf, x.dst_buf, x.src_off, x.dst_off))
-            i = 0
-            while i < len(copies) - 1:
-                c1 = copies[i]
-                c2 = copies[i+1]
-                if (c1.src_buf == c2.src_buf and c1.dst_buf == c2.dst_buf and
-                    c1.src_off + c1.cnt == c2.src_off and c1.dst_off + c1.cnt == c2.dst_off):
-                    c1.cnt += c2.cnt
-                    del copies[i+1]
-                else:
-                    i += 1
-        combine_copies(gpu.precopies)
-        combine_copies(gpu.postcopies)
-
-    ##### Sort of the end of buffer management
-
-    # Expand copies by instances if necessary
-    # if instances > 1:
-    #     print("here")
-    #     for rank, gpu in gpus.items():
-    #         for copy in itertools.chain(gpu.precopies, gpu.postcopies):
-    #             print("hello")
-    #             copy.src_off *= instances
-    #             copy.dst_off *= instances
-    #             copy.cnt *= instances
+    # Sort scratch mappings in an attemp to make more of them contiguous (this is of course a heuristic).
+    # for gpu in gpus.values():
+    #     gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
 
     def make_intervals(src, dst, addrs_set):
         if len(addrs_set) == 0:
@@ -395,76 +483,195 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                 yield (srcbuff, srcoff, dstbuff, dstoff, 1)    
 
     # Turn all steps of the algorithm into operations
-    ops_by_channel = defaultdict(list)
-
-    sends_by_step = []
+    op_sets = []
+    # Track the latest op that wrote to each buffer index
+    writers = defaultdict(list)
+    # Track all the reads since the last write to each buffer index
+    readers = defaultdict(list)
+    relays = defaultdict(list)
+    s_relays = defaultdict(list)
+    all_sends = []
     for step_idx, step in enumerate(algorithm.steps):
+        # print("step:", step_idx)
+        new_writers = defaultdict(list)
+        new_readers = defaultdict(list)
+
         # Group sent addresses by edge
         grouped_sends = defaultdict(set)
-        for addr, src, dst in step.sends:
-            grouped_sends[(src,dst)].add(addr)
+        if len(step.sends[0]) == 5:
+            for addr, src, dst, t, l in step.sends:
+                if combine_contig:
+                    grouped_sends[(src,dst)].add(addr)
+                else:
+                    grouped_sends[(src,dst,t,l)].add(addr)
+        elif len(step.sends[0]) == 6:
+            for addr, src, dst, t, l, redop in step.sends:
+                if combine_contig:
+                    grouped_sends[(src,dst)].add(addr)
+                else:
+                    grouped_sends[(src,dst,t,l,redop)].add(addr)
+        else:
+            for addr, src, dst in step.sends:
+                grouped_sends[(src,dst)].add(addr)
 
         # Combine sends into intervals and create multiple instances if necessary
         sends = []
-        for (src, dst), addrs in grouped_sends.items():
-            intervals = list(make_intervals(src, dst, addrs))
-            if channel_policy == ChannelPolicy.One:
-                num_chans = 1
-                channeled_intervals = [ (src_buf, src_off, dst_buf, dst_off, cnt, 0) for src_buf, src_off, dst_buf, dst_off, cnt in intervals ]
-            elif channel_policy == ChannelPolicy.MatchTopology:
-                # Divide sends onto channels matching the topology (assume bw is ideal concurrency)
-                # Sends are split to balance channels if necessary
-                num_chans = algorithm.topology.link(src,dst)
-                channeled_intervals = []
-
-                intervals.sort(key=lambda x: x[4])
-                counts = [x[4] for x in intervals]
-                total = sum(counts)
-                targets = [(total//num_chans) + (1 if i < (total%num_chans) else 0) for i in range(num_chans)]
-
-                chan = 0
-                while len(intervals) > 0:
-                    if targets[chan] >= counts[-1]:
-                        i = -1
-                    else:
-                        i = bisect.bisect_left(counts, targets[chan])
-                        if i == len(counts) or counts[i] != targets[chan]:
-                            i = -1
-                    src_buf, src_off, dst_buf, dst_off, cnt = intervals[i]
-                    del intervals[i]
-                    del counts[i]
-                    if cnt > targets[chan]:
-                        rem = cnt - targets[chan]
-                        cnt = targets[chan]
-                        j = bisect.bisect_left(counts, rem)
-                        intervals.insert(j, (src_buf, src_off + cnt, dst_buf, dst_off + cnt, rem))
-                        counts.insert(j, rem)
-
-                    channeled_intervals.append((src_buf, src_off, dst_buf, dst_off, cnt, chan))
-                    targets[chan] -= cnt
-                    assert targets[chan] >= 0
-                    if targets[chan] == 0:
-                        chan += 1
+        if combine_contig or len(step.sends[0])<5:
+            for (src, dst), addrs in grouped_sends.items():
+                for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
+                    for i in range(instances):
+                        new_src_off = src_off * instances + i * cnt
+                        new_dst_off = dst_off * instances + i * cnt
+                        send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
+                        sends.append(send)
+        elif len(step.sends[0])==6:
+            for (src,dst,t,l,redop) in sorted(grouped_sends, key=lambda x: x[2]):
+                addrs = grouped_sends[(src,dst,t,l,redop)]
+                for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
+                    for i in range(instances):
+                        new_src_off = src_off * instances + i * cnt
+                        new_dst_off = dst_off * instances + i * cnt
+                        send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt, redop)
+                        sends.append(send)
+        else:
+            for (src, dst,t,l) in sorted(grouped_sends, key=lambda x: x[2]):
+                addrs = grouped_sends[(src,dst,t,l)]
+                for src_buf, src_off, dst_buf, dst_off, cnt in make_intervals(src, dst, addrs):
+                    for i in range(instances):
+                        new_src_off = src_off * instances + i * cnt
+                        new_dst_off = dst_off * instances + i * cnt
+                        send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt)
+                        sends.append(send)
+        # print("sends", sends)
+        # Perform dependency tracking and create _Op instances
+        global is_reduce
+        for send in sends: # TODO: Change to grouped_sends
+            redop = None
+            if len(send) == 7:
+                src, dst, src_buf, src_off, dst_buf, dst_off, cnt = send
             else:
-                assert False, 'Unhandled channel policy'
+                src, dst, src_buf, src_off, dst_buf, dst_off, cnt, redop = send
+            read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
+            # A send must wait for the previous recv (if any) to finish
+            send_depends = list(set(d for k in read_keys for d in writers[k]))
 
-            for src_buf, src_off, dst_buf, dst_off, cnt, chan in channeled_intervals:
-                for i in range(1):
-                    new_src_off = src_off * 1 + i * cnt
-                    new_dst_off = dst_off * 1 + i * cnt
-                    send = (src, dst, src_buf, new_src_off, dst_buf, new_dst_off, cnt, chan * 1 + i)
-                    sends.append(send)
-        sends_by_step.append(sends)
+            write_keys = [(dst,dst_buf,dst_off+i) for i in range(cnt)]
+            # A receive must wait for both the previous recv and any previous sends to finish
+            recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
+            # print(send_depends)
+            # print(recv_depends)
+            if add_time_deps:
+                if _is_relay_link(algorithm.topology, src, dst):
+                    if dst in relays:
+                        d, src_last = relays[dst]
+                        if src_last != src:
+                            recv_depends.append(d)
+                    if src in s_relays:
+                        d1, dst_last = s_relays[src]
+                        if dst_last != dst:
+                            send_depends.append(d1)
 
-    # instance_metadata(gpus, instances)
+            # send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
+            src_chunk = ChunkRef(src, src_buf, src_off, cnt)
+            dst_chunk = ChunkRef(dst, dst_buf, dst_off, cnt)
+            send_op = Op(Instruction.send, src, src_chunk, dst_chunk, send_depends)
+            if redop is None:
+                # recv_op = _Op(dst, src, step_idx, False, 'r', src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
+                recv_op = Op(Instruction.recv, dst, src_chunk, dst_chunk, recv_depends)
+            else:
+                assert redop == 'rrc'
+                is_reduce = True
+                recv_op = _Op(dst, src, step_idx, False, redop, src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
+
+            # Record the send and receive as a set of operations that must happen on the same channel
+            # if src_off == 0 or src_off == 1:
+            op_sets.append(send_op)
+            # print(send_op, recv_op)
+
+            if add_time_deps:
+                if _is_relay_link(algorithm.topology, src, dst):
+                    relays[dst] = (recv_op,src)
+                    s_relays[src] = (send_op,dst)
+            # Mark writers and readers to be added for the next step
+            for k in write_keys:
+                new_writers[k].append(recv_op)
+            for k in read_keys:
+                new_readers[k].append(send_op)
+        # Writes cut the dependency to both previous writes and reads
+        for key, deps in new_writers.items():
+            if key in new_readers:
+                gpu, buf, off = key
+                if "phasewise" in prefix:
+                    print("key", key)
+                    print("readers", new_readers[key])
+                    print("writers", new_writers[key])
+                    dep_send_op = new_readers[key][0]
+                    old_recv_op = new_writers[key][0]
+                    assert old_recv_op.op_type == 'rrc'
+                    deplist = old_recv_op.depends
+                    deplist.append(dep_send_op)
+                    new_recv_op = _Op(old_recv_op.gpu, old_recv_op.peer, old_recv_op.step, False, old_recv_op.op_type, old_recv_op.src_buffer, old_recv_op.src_offset, old_recv_op.dst_buffer, old_recv_op.dst_offset, old_recv_op.cnt, deplist)
+                    for i, op_set in enumerate(op_sets):
+                        if op_set[1] == old_recv_op:
+                            op_sets[i][1] = new_recv_op
+                    new_writers[key][0] = new_recv_op
+                    print(f'Encountered receive and send on the same buffer index on step {step_idx + 1} (gpu={gpu}, buf={buf}, off={off})')
+                    # print('but added deps')
+                else:
+                    raise RuntimeError(f'Encountered receive and send on the same buffer index on step {step_idx + 1} (gpu={gpu}, buf={buf}, off={off})\nAre you running a phasewise algo? Add prefix="_phasewise"')
+            writers[key] = deps
+            readers[key] = []
+        # Reads get added to any previous reads
+        for key, deps in new_readers.items():
+            readers[key].extend(deps)
+
+    if instances > 1:
+        for rank, gpu in gpus.items():
+            # Create instances copies of the copies.
+            new_copies = []
+            for copy in gpu.precopies:
+                for i in range(instances):
+                    # new_copy = _Copy(copy.input_offset * instances + i, copy.output_offset * instances + i)
+                    src = ChunkRef(rank, Buffer.input, copy.src.index * instances + i, 1)
+                    dst = ChunkRef(rank, Buffer.output, copy.dst.index * instances + i, 1)
+                    new_copy = Op(Instruction.copy, rank, src, dst)
+                    new_copies.append(new_copy)
+            gpu.precopies = new_copies
+
+            # Multiply the other metadata with instances
+            def expand_mappings(mappings):
+                return { addr * instances + i: idx * instances + i for addr, idx in mappings.items() for i in range(instances) }
+            gpu.inputs = expand_mappings(gpu.inputs)
+            gpu.outputs = expand_mappings(gpu.outputs)
+            gpu.input_chunks *= instances
+            gpu.output_chunks *= instances
+            gpu.scratch = expand_mappings(gpu.scratch)
+
+    # Fixup everything to match the instanced sends when multiple instances are generated
+    # Add all copies into extra threadblocks
+    for rank, gpu in gpus.items():
+        cpy_tb = Threadblock(0)
+        cpy_tb.rbid = len(gpu.threadblocks)
+        cpy_tb.ops = gpu.precopies + gpu.postcopies
+        gpu.threadblocks.append(cpy_tb)
+
+    # Allocate channels and group operations by channel
+    if channel_policy == ChannelPolicy.One:
+        ops_by_channel = {0: [op for op_set in op_sets for op in op_set]}
+    elif channel_policy == ChannelPolicy.MaxConcurrency:
+        ops_by_channel = _allocate_channels_max_concurrency(op_sets, logging)
+    elif channel_policy == ChannelPolicy.MatchTopology:
+        ops_by_channel = _allocate_channels_match_topology(op_sets, algorithm.topology, instances, scale_remote, logging)
+    else:
+        assert False, 'Unhandled channel policy'
 
     # Lower into a SCCLang program
+    print("Instances", instances)
     inplace = False
-    chunks = algorithm.collective.num_chunks
+    chunks = algorithm.collective.num_chunks * 2
     co_name = algorithm.collective.runtime_name
     num_ranks = algorithm.topology.num_nodes()
-    print(chunks, num_ranks)
-    # TODO: Make the collectives for synthesizer and language the same
+    print(f'{algorithm.collective.num_chunks} Chunk factor {chunks // num_ranks} Runtime name {co_name} and num_ranks {num_ranks}')
     if co_name == 'allreduce':
         collective = lang_collectives.AllReduce(num_ranks, chunks, inplace)
     elif co_name == 'allgather':
@@ -474,26 +681,216 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     elif co_name == 'reduce_scatter':
         collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
     # TODO: SCCLang instances are they equivalent?
-    program = SCCLProgram(algorithm.name, algorithm.topology, collective, instances, instr_fusion=instr_fusion)
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, sccl_in)
+
     with program:
         for rank, gpu in gpus.items():
-            for copy_op in gpu.precopies:
-                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).send(rank, copy_op.dst_buf, copy_op.dst_off)
+            for op in gpu.precopies:
+                chunk(op.rank, op.src.buffer, op.src.index, op.src.size).send(op.rank, op.dst.buffer, op.dst.index)
 
-        for step_idx, sends in enumerate(sends_by_step):
-            for src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan in sends:
-                # print(src, src_buf, src_off, dst_buf, dst_off, cnt)
-                chunk(src, src_buf, src_off, cnt).send(dst, dst_buf, dst_off, ch=chan)
-
-        for rank, gpu in gpus.items():
-            for copy_op in gpu.postcopies:
-                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).send(rank, copy_op.dst_buf, copy_op.dst_off)
-
-        # Add any copies from input to output that weren't already added
-        for rank, gpu in gpus.items():
-            for addr in gpu.inputs:
-                if addr in gpu.outputs:
-                    chunk(rank, Buffer.input, gpu.inputs[addr]).send(rank, Buffer.output, gpu.outputs[addr])
-                    del gpu.outputs[addr]
-                    
+        for chan, ops in ops_by_channel.items():
+            for op in ops:
+                chunk(op.rank, op.src.buffer, op.src.index, op.src.size).send(op.dst.rank, op.dst.buffer, op.dst.index)
+    
     return ir_to_xml(program.lower())
+
+    # Threadblock allocation
+    # Group by which operations need to be in the same threadblock
+    # tb_groups = defaultdict(list)
+    # for chan, chan_ops in ops_by_channel.items():
+    #     for op in chan_ops:
+    #         tb_groups[(op.rank, op.is_send(), op.peer(), chan)].append(op)
+
+    # tbs_by_gpu_chan = defaultdict(lambda: defaultdict(list))
+    # # For each group find or create a threadblock to add them to
+    # for key, grp in tb_groups.items():
+    #     rank, is_send, peer, chan = key
+    #     make_none = False
+    #     # # uncomment to only create IB transfers
+    #     # if rank//16 == peer//16:
+    #     #     make_none = True
+    #     #     continue
+    #     tbs = tbs_by_gpu_chan[rank][chan]
+    #     for tb in tbs:
+    #         tb_peer = tb.send if is_send else tb.recv
+    #         # An existing threadblock can be reused if:
+    #         # - Either the relevant peer is not set yet or the peer is the same
+    #         # - No operations already in the threadblock execute in the same step
+    #         if tb_peer == -1 or tb_peer == peer:
+    #             if all(not any(op1.step == op2.step for op2 in grp) for op1 in tb.ops):
+    #                 break
+    #     else:
+    #         # No existing threadblock was suitable, so create a new one
+    #         tb = Threadblock(chan)
+    #         tbs.append(tb)
+    #         gpus[rank].threadblocks.append(tb)
+    #     # Ensure the peer is set correctly
+    #     if is_send:
+    #         assert tb.send == -1 or tb.send == peer
+    #         tb.send = peer
+    #     else:
+    #         assert tb.recv == -1 or tb.recv == peer
+    #         tb.recv = peer
+    #     tb.ops.extend(grp)
+
+
+    # inplace = True
+    # chunks = algorithm.collective.num_chunks
+    # co_name = algorithm.collective.runtime_name
+    # num_ranks = algorithm.topology.num_nodes()
+    # # TODO: Make the collectives for synthesizer and language the same
+    # if co_name == 'allreduce':
+    #     collective = lang_collectives.AllReduce(num_ranks, chunks, inplace)
+    # elif co_name == 'allgather':
+    #     collective = lang_collectives.AllGather(num_ranks, chunks // num_ranks, inplace)
+    # elif co_name == 'alltoall':
+    #     inplace = False
+    #     collective = lang_collectives.AllToAll(num_ranks, chunks // num_ranks, inplace)
+    # elif co_name == 'reduce_scatter':
+    #     collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
+
+    # program = Program(algorithm.name, "allgather", inplace, "Simple", gpus.values())
+    # return ir_to_xml(program, old_format, use_scratch, pretty_print)
+
+    # Sort threadblocks in each GPU by peers and then the channel
+    # This is important as in NCCL threadblocks using the same NVLink concurrently should be close together
+    # for rank, gpu in gpus.items():
+    #     gpu.threadblocks = sorted([tb for tbs in tbs_by_gpu_chan[rank].values() for tb in tbs],
+    #         key=lambda tb: (tb.send, tb.recv, tb.channel))
+    #     for i, tb in enumerate(gpu.threadblocks):
+    #         tb.rbid = i
+
+    # # Do some additional postprocessing of operations:
+    # # - Expand operations with extra dependencies with no-ops
+    # # - Mark the index of each operation taking any extra no-ops into account
+    # # - Record the threadblock rbids for each operation
+    # all_ops = []
+    # for rank, gpu in gpus.items():
+    #     for tb in gpu.threadblocks:
+    #         tb.steps.sort(key=lambda op: op.step)
+    #         for op in tb.steps:
+    #             # Expand extra dependencies into nop operations
+    #             if len(op.depends) > 1:
+    #                 extra_deps = op.depends[1:]
+    #                 op.depends = op.depends[:1]
+    #                 first_step = op.step
+    #                 for i, dep in enumerate(extra_deps):
+    #                     tb.ops.append(_Op(op.gpu, None, op.step, False, 'nop', None, None, None, None, 0, [dep]))
+    #                     tb.ops[-1].idx = len(tb.ops) - 1
+    #             tb.ops.append(op)
+    #             tb.ops[-1].idx = len(tb.ops) - 1
+    #         for op in tb.ops:
+    #             op.block_rbid = tb.rbid
+    #         all_ops.extend(tb.ops)
+
+    # for op in all_ops:
+    #     if len(op.depends):
+    #         if op.depends[0].block_rbid is None:
+    #             print("this op", len(op.depends), op)
+    #             print("None depends:",op.depends[0])
+
+    # # Filter out dependencies within the same threadblock
+    # for op in all_ops:
+    #     op.depends = list(filter(lambda d: d.block_rbid != op.block_rbid, op.depends))
+
+    # # Mark all ops that have a dependence on them
+    # for op in all_ops:
+    #     for dep in op.depends:
+    #         dep.has_dependence = True
+
+    # Generate the XML structure
+    # algo_elem = ET.Element('algo')
+    # algo_elem.set('name', algorithm.name)
+    # algo_elem.set('nchannels', str(1 + max(max(tb.channel for tb in gpu.threadblocks) for gpu in gpus.values())))
+    # if old_format:
+    #     algo_elem.set('nchunksperloop', str(max(max(gpu.input_chunks, gpu.output_chunks) for gpu in gpus.values())))
+    #     algo_elem.set('proto', "Simple")
+    #     if "Allgather" in algorithm.name:
+    #         algo_elem.set('coll', "allgather")
+    #         algo_elem.set('inplace', "1")
+    #     elif "Alltoall" in algorithm.name:
+    #         algo_elem.set('coll', "alltoall")
+    #         algo_elem.set('inplace', "0")
+    #     elif "Allreduce" in algorithm.name:
+    #         algo_elem.set('coll', "allreduce")
+    #         algo_elem.set('inplace', "1")
+    #     elif "ReduceScatter" in algorithm.name:
+    #         algo_elem.set('coll', "reduce_scatter")
+    #         algo_elem.set('inplace', "1")
+    #     algo_elem.set('redop', "nop")
+    #     algo_elem.set('ngpus', str(len(gpus)))
+    # for rank, gpu in gpus.items():
+    #     gpu_elem = ET.SubElement(algo_elem, 'gpu')
+    #     gpu_elem.set('id', str(rank))
+    #     gpu_elem.set('i_chunks', str(gpu.input_chunks))
+    #     gpu_elem.set('o_chunks', str(gpu.output_chunks))
+    #     gpu_elem.set('s_chunks', str(gpu.scratch_size()))
+    #     for copy in gpu.copies:
+    #         copy_elem = ET.SubElement(gpu_elem, 'copy')
+    #         copy_elem.set('i_off', str(copy.input_offset))
+    #         copy_elem.set('o_off', str(copy.output_offset))
+    #     for tb in gpu.threadblocks:
+    #         tb_elem = ET.SubElement(gpu_elem, 'tb')
+    #         tb_elem.set('id', str(tb.rbid))
+    #         tb_elem.set('send', str(tb.send))
+    #         tb_elem.set('recv', str(tb.recv))
+    #         tb_elem.set('chan', str(tb.channel))
+    #         for op in tb.ops:
+    #             op_elem = ET.SubElement(tb_elem, 'op' if not old_format else 'step')
+    #             op_elem.set('step' if not old_format else 's', str(op.idx))
+    #             op_elem.set('type', op.op_type)
+
+    #             # The NCCL backend currently wants scratch at the end of output
+    #             if not use_scratch:
+    #                 if op.src_buffer == 's':
+    #                     op.src_buffer = 'o'
+    #                     op.src_offset += gpu.output_chunks
+    #                 if op.dst_buffer == 's':
+    #                     op.dst_buffer = 'o'
+    #                     op.dst_offset += gpu.output_chunks
+
+    #             if old_format:
+    #                 if op.src_buffer is not None:
+    #                     op_elem.set('srcbuf', op.src_buffer)
+    #                     op_elem.set('srcoff', str(op.src_offset))
+    #                 else:
+    #                     op_elem.set('srcbuf', 'i')
+    #                     op_elem.set('srcoff', '-1')
+    #                 if op.dst_buffer is not None:
+    #                     op_elem.set('dstbuf', op.dst_buffer)
+    #                     op_elem.set('dstoff', str(op.dst_offset))
+    #                 else:
+    #                     op_elem.set('dstbuf', 'o')
+    #                     op_elem.set('dstoff', '-1')
+    #             else:
+    #                 if op.is_send:
+    #                     if op.src_buffer is not None:
+    #                         op_elem.set('buf', op.src_buffer)
+    #                         op_elem.set('off', str(op.src_offset))
+    #                 else:
+    #                     if op.dst_buffer is not None:
+    #                         op_elem.set('buf', op.dst_buffer)
+    #                         op_elem.set('off', str(op.dst_offset))
+    #             if op.cnt > 1 or old_format:
+    #                 op_elem.set('cnt', str(op.cnt))
+    #             assert len(op.depends) <= 1
+    #             if len(op.depends) == 1:
+    #                 if make_none and op.depends[0].block_rbid is None:
+    #                     op_elem.set('depid', '-1')
+    #                 else:
+    #                     op_elem.set('depid', str(op.depends[0].block_rbid))
+    #                 if make_none and op.depends[0].idx is None:
+    #                     op_elem.set('deps', '-1')
+    #                 else:
+    #                     op_elem.set('deps', str(op.depends[0].idx))
+    #             elif old_format:
+    #                 op_elem.set('depid', '-1')
+    #                 op_elem.set('deps', '-1')
+    #             if op.has_dependence:
+    #                 op_elem.set('hasdep', '1')
+    #             elif old_format:
+    #                 op_elem.set('hasdep', '0')
+
+    # if pretty_print:
+    #     ET.indent(algo_elem, space='  ')
+    # return ET.tostring(algo_elem, encoding='unicode')

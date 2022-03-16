@@ -36,20 +36,20 @@ def check_threadblock_ordering(rank_dag):
             # happen in the same order.
             for op_step, op in enumerate(tb.ops):
                 if op.is_send():
-                    match = op.match[0]
+                    match = op.match
                     if match.is_recv():
                         assert op.dst.rank == match.rank, f"Bug in SCCLang: Sends don't match receives"
 
                     other_tbid = match.tb
                     if other_tbid in prev_steps:
                         if match.step <= prev_steps[other_tbid].step:
-                            print("Offending Steps", match.step, prev_steps[other_tbid].step)
+                            print("Offending steps on receiving tb", match.step, prev_steps[other_tbid].step)
                             print("Sending tb")
                             for op in tb.ops:
-                                print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority)}')
-                            print("Receiving tb")
+                                print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority)}, {op.channel}')
+                            print("Receiving tb", rank_dag.tbs[match.rank][other_tbid].channel)
                             for op in rank_dag.tbs[match.rank][other_tbid].ops:
-                                print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority)}')
+                                print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority)}, {op.channel}')
                             assert match.step >  prev_steps[other_tbid].step, f"Rank {op.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
                         
                     prev_steps[other_tbid] = match

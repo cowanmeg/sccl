@@ -98,7 +98,7 @@ class SCCLProgram:
     # Lower program to XML
     def lower(self):
         self.chunk_dag._complete_metadata()
-        self.chunk_dag.channel_assignment()
+        # self.chunk_dag.channel_assignment()
         self.chunk_dag.lower_rank_dag(self.rank_dag)
         if self.instr_fusion:
             self.rank_dag.optimize()
@@ -348,27 +348,105 @@ class ChunkDAG:
             
 
     # Assigns each send and a reduce a channel for communication based of policies
-    def channel_assignment(self, channel_policy='zero'):
-        frontier = []
-        visited = set()
-        for chunk, op in self.chunk_paths.items():
-            if len(op.prev) == 0: 
-                heapq.heappush(frontier, op)
+    # def channel_assignment(self, channel_policy='zero'):
+    #     frontier = []
+    #     visited = set()
+    #     for chunk, op in self.chunk_paths.items():
+    #         if len(op.prev) == 0: 
+    #             heapq.heappush(frontier, op)
 
-        # If an op isn't annotated with a channel set it to 0
-        if channel_policy == 'zero':
-            while len(frontier) > 0:
-                op = heapq.heappop(frontier)
-                if op not in visited:
-                    op.ch = 0 if op.ch == -1 else op.ch
-                    for o in op.next:
-                        heapq.heappush(frontier, o)
-                    visited.add(op)
+    #     # If an op isn't annotated with a channel set it to 0
+    #     if channel_policy == 'zero':
+    #         while len(frontier) > 0:
+    #             op = heapq.heappop(frontier)
+    #             if op not in visited:
+    #                 op.ch = 0 if op.ch == -1 else op.ch
+    #                 for o in op.next:
+    #                     heapq.heappush(frontier, o)
+    #                 visited.add(op)
+
+    def identify_rings(self):
+        frontier = []
+        for chunk, op in self.chunk_paths.items():
+            if op.inst == ChunkInstruction.start:
+                frontier += op.next
+
+        # Identify potential flows from the ChunkDag
+        chains = []
+        chain_roots = []
+        visited = set()
+        i = 0
+        while i < len(frontier):
+            op = frontier[i]
+            if op not in visited:
+                op.ch = 0 if op.ch == -1 else op.ch
+                print(op.ch)
+                visited.add(op)
+                if op.steps_from_start == 1:
+                    ring = [op.dst.rank]
+                    c = [op]
+                    # print("Start", op.dst.rank, op.inst, op.dst)
+                    # For now only look at one? What happens if there are multiple?
+                    next = None if len(op.next) == 0 else op.next[0]
+                    # assert len(op.next) <= 1, f"{op} {op.next}"
+                    while next is not None:
+                        visited.add(next)
+                        next.ch = 0 if next.ch == -1 else next.ch
+                        if next.dst.rank != ring[-1]: # Hack to avoid including the copy in the chain
+                            # print("  ", next.dst.rank, next.inst, next.dst)
+                            ring.append(next.dst.rank)
+                            c.append(next)
+                        next = None if len(next.next) == 0 else next.next[0]
+
+                    if len(ring) > 2:
+                        chains.append(ring)
+                        chain_roots.append(op)
+            i += 1
+
+        flows = []
+        counts = []
+        flows_to_roots = []
+        for chain, root in zip(chains, chain_roots):
+            idx = 0
+            min_val = chain[0]
+            for x, val in enumerate(chain):
+                if val < min_val:
+                    idx = x
+                    min_val = val
+            flow = chain[idx:] + chain[0:idx]
+            duplicate = False
+            for i, f in enumerate(flows):
+                if f == flow:
+                    duplicate = True
+                    counts[i] += 1
+                    flows_to_roots[i].append(root)
+            if not duplicate:
+                flows.append(flow)
+                counts.append(1)
+                flows_to_roots.append([root])
+        
+        flow_channel = 0
+        for f, count, root in zip(flows, counts, flows_to_roots):
+            
+            if count > 3:
+                flow_channel += 1
+                print(f, count, "assigned to channel", flow_channel)
+                i = 0
+                while i < len(root):
+                    op = root[i]
+                    op.ch = flow_channel
+                    while len(op.next) > 0:
+                        op = op.next[0]
+                        op.ch = flow_channel
+                    i += 1
+            else:
+                print(f, count, "not assigned")
 
     def lower_rank_dag(self, rank_dag):
+        self.identify_rings()
         frontier = []
         visited = set()
-
+        num = 0
         for chunk, op in self.chunk_paths.items():
             if len(op.prev) == 0: 
                 heapq.heappush(frontier, op)
@@ -386,20 +464,24 @@ class ChunkDAG:
                     sender = op.src.rank
                     receiver = op.dst.rank
                     if sender != receiver:
-                        sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2+1, sendtb, ch)
-                        rop = rank_dag.add_recv(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
-                        sop.match = [rop]
+                        sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start, op.steps_to_end+0.5, sendtb, ch, num)
+                        rop = rank_dag.add_recv(receiver, op.src, op.dst, op.steps_from_start+0.5, op.steps_to_end, recvtb, ch, num+1)
+                        num += 2
+                        sop.match = rop
                     else:
-                        rank_dag.add_copy(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb, ch)
+                        rank_dag.add_copy(sender, op.src, op.dst, op.steps_from_start, op.steps_to_end, sendtb, ch, num)
+                        num += 1
                 elif op.inst == ChunkInstruction.reduce:
                     sender = op.src.rank
                     receiver = op.dst.rank
                     if sender != receiver:
-                        sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start*2,op.steps_to_end*2+1, sendtb, ch)
-                        rop = rank_dag.add_recv_reduce_copy(receiver, op.src, op.dst, op.steps_from_start*2+1, op.steps_to_end*2, recvtb, ch)
-                        sop.match = [rop]
+                        sop = rank_dag.add_send(sender, op.src, op.dst, op.steps_from_start,op.steps_to_end+0.5, sendtb, ch, num)
+                        rop = rank_dag.add_recv_reduce_copy(receiver, op.src, op.dst, op.steps_from_start+0.5, op.steps_to_end, recvtb, ch, num+1)
+                        sop.match = rop
+                        num += 2
                     else:
-                        rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start*2, op.steps_to_end*2, sendtb, ch)
+                        rank_dag.add_reduce(sender, op.src, op.dst, op.steps_from_start, op.steps_to_end, sendtb, ch, num)
+                        num += 1
 
                 for o in op.next:
                     heapq.heappush(frontier, o)
