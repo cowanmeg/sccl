@@ -166,7 +166,7 @@ class Op:
     def peer(self):
         if self.inst == Instruction.send:
             return self.dst.rank
-        elif self.inst == Instruction.recv:
+        elif self.inst == Instruction.recv or self.inst == Instruction.recv_reduce_copy:
             return self.src.rank
         else:
             return None

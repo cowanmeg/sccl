@@ -3,6 +3,7 @@
 
 from dataclasses import dataclass
 from collections import defaultdict
+from sccl.topologies import topology
 
 @dataclass
 class Step(object):
@@ -10,7 +11,7 @@ class Step(object):
     sends: list
 
 class Algorithm(object):
-    def __init__(self, name, collective, topology, instance, steps, input_map = {}, output_map = {}):
+    def __init__(self, name, collective, topology, instance, steps, input_map = {}, output_map = {}, cont=False):
         self.name = name
         self.topology = topology
         self.collective = collective
@@ -18,15 +19,19 @@ class Algorithm(object):
         self.steps = steps
         self.input_map = input_map
         self.output_map = output_map
+        self.cont = cont
 
         self._update_link_utilizations()
-        self._check_bandwidth_constraints()
+        if not cont:
+            self._check_bandwidth_constraints()
+        else:
+            self._check_real_bandwidth_constraints()
 
-        for step in self.steps:
-            step.sends.sort()
+        # for step in self.steps:
+        #     step.sends.sort()
 
     @classmethod
-    def make_implementation(cls, collective, topology, instance, steps):
+    def make_implementation(cls, collective, topology, instance, steps, cont=False, suffix=""):
         chunked = collective.chunk_up(instance.chunks)
 
         # Figure out input and output addresses
@@ -48,9 +53,9 @@ class Algorithm(object):
                 output_map[rank] = output_addrs
 
         # Concatenate collective and topology names plus instance arguments to create a name
-        name = f'{collective.name}-{topology.name}-{instance}'
+        name = f'{collective.name}-{topology.name}-{instance}{suffix}'
 
-        algo = cls(name, collective, topology, instance, steps, input_map, output_map)
+        algo = cls(name, collective, topology, instance, steps, input_map, output_map, cont)
         algo.check_implements(chunked)
         if instance.extra_rounds > 0:
             used_extra_rounds = algo.extra_rounds()
@@ -91,9 +96,18 @@ class Algorithm(object):
         # Propagate state through sends of every step
         for step in self.steps:
             next_state = state.copy()
-            for addr, src, dst in step.sends:
-                for chunk in chunks_at_address[addr]:
-                    next_state[idx(dst, chunk)] |= state[idx(src, chunk)]
+            if len(step.sends[0]) == 5:
+                for addr, src, dst, _, _ in step.sends:
+                    for chunk in chunks_at_address[addr]:
+                        next_state[idx(dst, chunk)] |= state[idx(src, chunk)]
+            elif len(step.sends[0]) == 6:
+                for addr, src, dst, _, _, _ in step.sends:
+                    for chunk in chunks_at_address[addr]:
+                        next_state[idx(dst, chunk)] |= state[idx(src, chunk)]
+            else:
+                for addr, src, dst in step.sends:
+                    for chunk in chunks_at_address[addr]:
+                        next_state[idx(dst, chunk)] |= state[idx(src, chunk)]
             state = next_state
         # Check that the postcondition holds
         for rank in collective.ranks():
@@ -106,8 +120,15 @@ class Algorithm(object):
         ranks = range(self.topology.num_nodes())
         for step in self.steps:
             step_utilizations = [[0 for _ in ranks] for _ in ranks]
-            for addr, src, dst in step.sends:
-                step_utilizations[dst][src] += 1 # Same order as topology
+            if len(step.sends[0]) == 5:
+                for addr, src, dst, _, _ in step.sends:
+                    step_utilizations[dst][src] += 1 # Same order as topology
+            elif len(step.sends[0]) == 6:
+                for addr, src, dst, _, _, _ in step.sends:
+                    step_utilizations[dst][src] += 1 # Same order as topology
+            else:
+                for addr, src, dst in step.sends:
+                    step_utilizations[dst][src] += 1 # Same order as topology
             self._link_utilizations.append(step_utilizations)
 
     def _check_bandwidth_constraints(self):
@@ -124,6 +145,21 @@ class Algorithm(object):
                 assert util <= bw * step.rounds, \
                     f'Step {step_num} uses {util} bandwidth but constraint {name} only allows for {bw * step.rounds} bandwidth (when rounds={step.rounds}).'
 
+    def _check_real_bandwidth_constraints(self):
+        for srcs, dsts, bw, name in self.topology.real_bandwidth_constraints():
+            for step_num, step in enumerate(self.steps):
+                util = 0
+                for dst in dsts:
+                    for src in srcs:
+                        if self.is_pipelined():
+                            for overlapping_step in range(step_num, len(self.steps), self.instance.pipeline):
+                                util += self._link_utilizations[overlapping_step][dst][src]
+                        else:
+                            util += self._link_utilizations[step_num][dst][src]
+                assert util * bw <= step.rounds, \
+                    f'Step {step_num} uses {util * bw} time but constraint {name} only allows for {step.rounds} time (when rounds={step.rounds}).'
+
+
     def __str__(self):
         s = ''
         for i, step in enumerate(self.steps):
@@ -133,5 +169,10 @@ class Algorithm(object):
                 s += f'(step {i+1}, rounds={step.rounds}) '
             else:
                 s += f'(step {i+1}) '
-            s += ', '.join([f'{chunk}:{src}→{dst}' for chunk, src, dst in step.sends])
+            if len(step.sends[0]) == 5:
+                s += ', '.join([f'{chunk}:{src}→{dst}' for chunk, src, dst, _, _ in step.sends])
+            elif len(step.sends[0]) == 6:
+                s += ', '.join([f'{chunk}:{src}→{dst}' for chunk, src, dst, _, _, _ in step.sends])
+            else:
+                s += ', '.join([f'{chunk}:{src}→{dst}' for chunk, src, dst in step.sends])
         return s
