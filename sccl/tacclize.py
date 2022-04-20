@@ -9,12 +9,16 @@ import threading, queue
 from enum import Enum
 from z3 import *
 from sccl.language.ir import *
+from sccl.language import *
 import sccl.language.collectives as lang_collectives
 
 @dataclass
-class _Copy:
-    input_offset: int
-    output_offset: int
+class CopyOp:
+    src_buf: Buffer
+    src_off: int
+    dst_buf: Buffer
+    dst_off: int
+    cnt: int
 
 # Poor hack
 is_reduce = False 
@@ -320,16 +324,21 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             for idx, addr in enumerate(sorted(algorithm.input_map[rank])):
                 if addr in outputs:
                     # copies.append(_Copy(idx, outputs[addr]))
-                    src_ref = ChunkRef(rank, Buffer.input, idx, 1)
-                    dst_ref = ChunkRef(rank, Buffer.output, outputs[addr], 1)
-                    copies.append(Op(Instruction.copy, rank, src_ref, dst_ref))
+                    # src_ref = ChunkRef(rank, Buffer.input, idx, 1)
+                    # dst_ref = ChunkRef(rank, Buffer.output, outputs[addr], 1)
+                    # copies.append(Op(Instruction.copy, rank, src_ref, dst_ref))
+                    op = CopyOp(Buffer.input, idx, Buffer.output, outputs[addr], 1)
+                    copies.append(op)
+                    
                 else:
                     inputs[addr] = idx
-        # gpus[rank] = _Gpu(copies, inputs, outputs, len(inputs) + len(copies), len(outputs))
-        tb = Threadblock(channel=0, ops=copies)
-        gpus[rank] = Gpu(rank, [], [], [], inputs, outputs, len(inputs), len(outputs))
-        gpus[rank].threadblocks.append(tb)
+        gpus[rank] = Gpu(rank, [], copies, [], inputs, outputs, len(inputs), len(outputs))
 
+        # gpus[rank] = _Gpu(copies, inputs, outputs, len(inputs) + len(copies), len(outputs))
+        # tb = Threadblock(channel=0, ops=copies)
+        # gpus[rank] = Gpu(rank, [], [], [], inputs, outputs, len(inputs), len(outputs))
+        # gpus[rank].threadblocks.append(tb)
+# 
     # Create scratch buffer mappings if necessary
     def allocate_scratch(gpu, addr):
         if not (addr in gpu.inputs or addr in gpu.outputs or addr in gpu.scratch):
@@ -393,11 +402,11 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         # if addr in gpu.scratch:
         #     return 's', gpu.scratch[addr]
         if addr in gpu.inputs:
-            return 'i', gpu.inputs[addr]
+            return Buffer.input, gpu.inputs[addr]
         elif addr in gpu.outputs:
-            return 'o', gpu.outputs[addr]
+            return Buffer.output, gpu.outputs[addr]
         elif addr in gpu.scratch:
-            return 's', gpu.scratch[addr]
+            return Buffer.scratch, gpu.scratch[addr]
         else:
             raise RuntimeError('Address is not mapped to a buffer')
 
@@ -505,15 +514,16 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                 src, dst, src_buf, src_off, dst_buf, dst_off, cnt = send
             else:
                 src, dst, src_buf, src_off, dst_buf, dst_off, cnt, redop = send
-            read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
-            # A send must wait for the previous recv (if any) to finish
-            send_depends = list(set(d for k in read_keys for d in writers[k]))
+            # read_keys = [(src,src_buf,src_off+i) for i in range(cnt)]
+            # # A send must wait for the previous recv (if any) to finish
+            # send_depends = list(set(d for k in read_keys for d in writers[k]))
 
-            write_keys = [(dst,dst_buf,dst_off+i) for i in range(cnt)]
-            # A receive must wait for both the previous recv and any previous sends to finish
-            recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
+            # write_keys = [(dst,dst_buf,dst_off+i) for i in range(cnt)]
+            # # A receive must wait for both the previous recv and any previous sends to finish
+            # recv_depends = list(set(d for deps in (readers, writers) for k in write_keys for d in deps[k]))
             # print(send_depends)
             # print(recv_depends)
+            # TODO: What is this for?
             if add_time_deps:
                 if _is_relay_link(algorithm.topology, src, dst):
                     if dst in relays:
@@ -526,31 +536,37 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                             send_depends.append(d1)
 
             # send_op = _Op(src, dst, step_idx, True, 's', src_buf, src_off, dst_buf, dst_off, cnt, send_depends)
-            src_ref = ChunkRef(src, src_buf, src_off, cnt)
-            dst_ref = ChunkRef(dst, dst_buf, dst_off, cnt)
-            send_op = Op(Instruction.send, src, src_ref, dst_ref, send_depends, step=step_idx)
+            # src_ref = ChunkRef(src, src_buf, src_off, cnt)
+            # dst_ref = ChunkRef(dst, dst_buf, dst_off, cnt)
+            # send_op = Op(Instruction.send, src, src_ref, dst_ref, send_depends, step=step_idx)
+            # if redop is None:
+            #     # recv_op = _Op(dst, src, step_idx, False, 'r', src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
+            #     recv_op = Op(Instruction.recv, dst, src_ref, dst_ref, recv_depends, step=step_idx)
+            # else:
+            #     assert redop == 'rrc'
+            #     is_reduce = True
+            #     recv_op = Op(Instruction.recv_reduce_copy, dst, src_ref, dst_ref, recv_depends, step=step_idx)
+            #     # recv_op = _Op(dst, src, step_idx, False, redop, src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
+            # # Record the send and receive as a set of operations that must happen on the same channel
+            # # if src_off == 0 or src_off == 1:
+            # op_sets.append([send_op, recv_op])
+            # # print(send_op, recv_op)
             if redop is None:
-                # recv_op = _Op(dst, src, step_idx, False, 'r', src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
-                recv_op = Op(Instruction.recv, dst, src_ref, dst_ref, recv_depends, step=step_idx)
+                op_type = 'send'
             else:
-                assert redop == 'rrc'
-                is_reduce = True
-                recv_op = Op(Instruction.recv_reduce_copy, dst, src_ref, dst_ref, recv_depends, step=step_idx)
-                # recv_op = _Op(dst, src, step_idx, False, redop, src_buf, src_off, dst_buf, dst_off, cnt, recv_depends)
-            # Record the send and receive as a set of operations that must happen on the same channel
-            # if src_off == 0 or src_off == 1:
-            op_sets.append([send_op, recv_op])
-            # print(send_op, recv_op)
+                op_type = 'reduce'
+            op = (op_type, src, dst, src_buf, src_off, dst_buf, dst_off, cnt, 0)
+            op_sets.append(op)
 
             if add_time_deps:
                 if _is_relay_link(algorithm.topology, src, dst):
                     relays[dst] = (recv_op,src)
                     s_relays[src] = (send_op,dst)
             # Mark writers and readers to be added for the next step
-            for k in write_keys:
-                new_writers[k].append(recv_op)
-            for k in read_keys:
-                new_readers[k].append(send_op)
+            # for k in write_keys:
+            #     new_writers[k].append(recv_op)
+            # for k in read_keys:
+            #     new_readers[k].append(send_op)
         # Writes cut the dependency to both previous writes and reads
         for key, deps in new_writers.items():
             if key in new_readers:
@@ -607,58 +623,59 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
             gpu.scratch = expand_mappings(gpu.scratch)
 
     # Allocate channels and group operations by channel
-    if channel_policy == ChannelPolicy.One:
-        ops_by_channel = {0: [op for op_set in op_sets for op in op_set]}
-    elif channel_policy == ChannelPolicy.MaxConcurrency:
-        ops_by_channel = _allocate_channels_max_concurrency(op_sets, logging)
-    elif channel_policy == ChannelPolicy.MatchTopology:
-        ops_by_channel = _allocate_channels_match_topology(op_sets, algorithm.topology, instances, scale_remote, logging)
-    else:
-        assert False, 'Unhandled channel policy'
+    ops_by_channel = {0: [op for op_set in op_sets for op in op_set]}
+    # if channel_policy == ChannelPolicy.One:
+    #     ops_by_channel = {0: [op for op_set in op_sets for op in op_set]}
+    # elif channel_policy == ChannelPolicy.MaxConcurrency:
+    #     ops_by_channel = _allocate_channels_max_concurrency(op_sets, logging)
+    # elif channel_policy == ChannelPolicy.MatchTopology:
+    #     ops_by_channel = _allocate_channels_match_topology(op_sets, algorithm.topology, instances, scale_remote, logging)
+    # else:
+    #     assert False, 'Unhandled channel policy'
 
     # Group by which operations need to be in the same threadblock
-    tb_groups = defaultdict(list)
-    for chan, chan_ops in ops_by_channel.items():
-        for op in chan_ops:
-            tb_groups[(op.rank, op.is_send(), op.peer(), chan)].append(op)
+    # tb_groups = defaultdict(list)
+    # for chan, chan_ops in ops_by_channel.items():
+    #     for op in chan_ops:
+    #         tb_groups[(op.rank, op.is_send(), op.peer(), chan)].append(op)
 
-    tbs_by_gpu_chan = defaultdict(lambda: defaultdict(list))
-    # For each group find or create a threadblock to add them to
-    for key, grp in tb_groups.items():
-        rank, is_send, peer, chan = key
-        make_none = False
-        # # uncomment to only create IB transfers
-        # if rank//16 == peer//16:
-        #     make_none = True
-        #     continue
-        tbs = tbs_by_gpu_chan[rank][chan]
-        for tb in tbs:
-            tb_peer = tb.send if is_send else tb.recv
-            # An existing threadblock can be reused if:
-            # - Either the relevant peer is not set yet or the peer is the same
-            # - No operations already in the threadblock execute in the same step
-            if tb_peer == -1 or tb_peer == peer:
-                if all(not any(op1.step == op2.step for op2 in grp) for op1 in tb.ops):
-                    break
-        else:
-            # No existing threadblock was suitable, so create a new one
-            # tb = _Threadblock(chan)
-            tb = Threadblock(channel=chan)
-            tbs.append(tb)
-        # Ensure the peer is set correctly
-        if is_send:
-            assert tb.send == -1 or tb.send == peer
-            tb.send = peer
-        else:
-            assert tb.recv == -1 or tb.recv == peer
-            tb.recv = peer
-        # tb.steps.extend(grp)
-        tb.ops.extend(grp)
+    # tbs_by_gpu_chan = defaultdict(lambda: defaultdict(list))
+    # # For each group find or create a threadblock to add them to
+    # for key, grp in tb_groups.items():
+    #     rank, is_send, peer, chan = key
+    #     make_none = False
+    #     # # uncomment to only create IB transfers
+    #     # if rank//16 == peer//16:
+    #     #     make_none = True
+    #     #     continue
+    #     tbs = tbs_by_gpu_chan[rank][chan]
+    #     for tb in tbs:
+    #         tb_peer = tb.send if is_send else tb.recv
+    #         # An existing threadblock can be reused if:
+    #         # - Either the relevant peer is not set yet or the peer is the same
+    #         # - No operations already in the threadblock execute in the same step
+    #         if tb_peer == -1 or tb_peer == peer:
+    #             if all(not any(op1.step == op2.step for op2 in grp) for op1 in tb.ops):
+    #                 break
+    #     else:
+    #         # No existing threadblock was suitable, so create a new one
+    #         # tb = _Threadblock(chan)
+    #         tb = Threadblock(channel=chan)
+    #         tbs.append(tb)
+    #     # Ensure the peer is set correctly
+    #     if is_send:
+    #         assert tb.send == -1 or tb.send == peer
+    #         tb.send = peer
+    #     else:
+    #         assert tb.recv == -1 or tb.recv == peer
+    #         tb.recv = peer
+    #     # tb.steps.extend(grp)
+    #     tb.ops.extend(grp)
 
-    for rank, tb_by_chan in tbs_by_gpu_chan.items():
-        for _, tbs in tb_by_chan.items():
-            for tb in tbs:
-                gpus[rank].threadblocks.append(tb)
+    # for rank, tb_by_chan in tbs_by_gpu_chan.items():
+    #     for _, tbs in tb_by_chan.items():
+    #         for tb in tbs:
+    #             gpus[rank].threadblocks.append(tb)
 
     protocol='Simple'
     inplace = False
@@ -673,5 +690,33 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         collective = lang_collectives.AllToAll(num_ranks, chunks // num_ranks, inplace)
     elif co_name == 'reduce_scatter':
         collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
-    program = Program('name', 'allreduce', inplace, protocol, gpus.values())
-    return ir_to_xml(program, old_format, True, pretty_print)
+    # program = Program('name', 'allreduce', inplace, protocol, gpus.values())
+    # return ir_to_xml(program, old_format, True, pretty_print)
+    instr_fusion = True
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=instr_fusion)
+    with program:
+        for rank, gpu in gpus.items():
+            for copy_op in gpu.precopies:
+                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).send(rank, copy_op.dst_buf, copy_op.dst_off)
+
+        # for step_idx, sends in enumerate(op_sets):
+        #     # print(step_idx)
+        for op_type, src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan in op_sets:
+            # print("  ", src, chan, src_buf, src_off, dst, dst_buf, dst_off, cnt)
+            if op_type == 'send':
+                chunk(src, src_buf, src_off, cnt).send(dst, dst_buf, dst_off, ch=chan)
+            else:
+                chunk(src, src_buf, src_off, cnt).reduce(dst, dst_buf, dst_off, ch=chan)
+
+        for rank, gpu in gpus.items():
+            for copy_op in gpu.postcopies:
+                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).send(rank, copy_op.dst_buf, copy_op.dst_off)
+
+        # Add any copies from input to output that weren't already added
+        for rank, gpu in gpus.items():
+            for addr in gpu.inputs:
+                if addr in gpu.outputs:
+                    chunk(rank, Buffer.input, gpu.inputs[addr]).send(rank, Buffer.output, gpu.outputs[addr])
+                    del gpu.outputs[addr]
+                    
+    return ir_to_xml(program.lower())

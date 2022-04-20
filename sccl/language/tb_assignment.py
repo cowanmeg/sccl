@@ -137,58 +137,90 @@ def topo_sort_instrs(rank_dag):
 
     return ordered
 
+# TODO: Flows need to respect the channel assignment...
 def channel_assignment(instrs, rank_dag):
     def f():
-        return set()
+        return set([x for x in range(32)])
     # Naive - schedule everything onto channel 0
     # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
     # Then flow Rw->Rx->Rz must be ib a different channel c' where c!=c'
+    # rank2sendch[rank][x] returns a set of all the available channels for rank -> x (sending from rank)
+    # rank2recvch[rank][x] returns a set of all available channels for x -> rank (receiving on rank)
     rank2sendch = [defaultdict(f) for _ in range(rank_dag.num_ranks)]
     rank2recvch = [defaultdict(f) for _ in range(rank_dag.num_ranks)]
 
     # DFS through the InstructionDAG identifying flows
-    # TODO: This could probably be merged with the metadata collection...
     def valid_send_ch(sender, receiver, ch):
-        return ch not in rank2sendch[sender][receiver]
+        return ch in rank2sendch[sender][receiver]
     def valid_recv_ch(sender, receiver, ch):
-        return ch not in rank2recvch[receiver][sender]
+        return ch in rank2recvch[receiver][sender]
+
+    def is_matching_flow(flow):
+        # Exact match
+        if flow in flows:
+            return flow_channels[flows.index(flow)]
+        # Check if this flow is a subset of an existing flow
+        for existing_flow in flows:
+            if flow.issubset(existing_flow):
+                print(flow)
+                print("Existing flow", existing_flow)
+                return flows_channels[flows.index(existing_flow)]
+        # No match
+        return -1
+
+    def add_flow(sender, receiver, ch):
+        if ch in rank2sendch[sender][receiver]:
+            rank2sendch[sender][receiver].remove(ch)
+        if ch in rank2recvch[receiver][sender]:
+            rank2recvch[receiver][sender].remove(ch)
 
     flows = []
     flow_channels = []
 
-    def dfs(op, channel, f):
+    def create_flow(f):
+        flow = set()
+        for i in range(1, len(f)):
+            flow.add((f[i-1], f[i]))
+        return flow
+        
+    def dfs(op, channels, f):
+        # print("  ", op)
         if op.is_local():
             op.channel = 0
         elif op.is_send():
             match = op.recv_match
             sender = op.rank
             receiver = match.rank
-            # Find the first usable channel
-            ch = channel
-            while not(valid_send_ch(sender, receiver, ch) and valid_recv_ch(sender, receiver, ch)):
-                ch += 1
+            # Available channels
+            channels = rank2sendch[sender][receiver].intersection(rank2recvch[receiver][sender]).intersection(channels)
+            f.append(op.rank)
             # If not a fused op use the first possible channel (send, recv/rrc)
             if not match.is_fused():
                 # Check if this flow exists
-                f.append(op.rank)
                 f.append(match.rank)
-                if f in flows:
-                    ch = flow_channels[flows.index(f)]
-                else:
-                    flows.append(f)
+                flow = create_flow(f)
+                # if flow in flows:
+                ch = is_matching_flow(flow)
+                if ch == -1: # No flow matched
+                    ch = min(channels)
+                    # print("New flow", flow)
+                    # print(f)
+                    # print("Possible channels", channels)
+                    # print("Using channel", ch)
+                    flows.append(flow)
                     flow_channels.append(ch)
+
                 op.channel = ch
                 match.channel = ch
-                rank2sendch[sender][receiver].add(ch)
-                rank2recvch[receiver][sender].add(ch)
+                add_flow(sender, receiver, ch)
             else:
-                f.append(op.rank)
-                dfs(match, ch, f)
+                dfs(match, channels, f)
                 ch = match.channel
                 op.channel = ch
-                rank2sendch[sender][receiver].add(ch)
+                add_flow(sender, receiver, ch)
 
     # Assign channels to flows
     for op in instrs:
         if op.inst == Instruction.send and op.recv_match.is_fused():
-            dfs(op, 0, [])
+            # print("Start flow")
+            dfs(op, set([x for x in range(32)]), [])
