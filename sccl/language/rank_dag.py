@@ -153,6 +153,14 @@ class InstructionDAG:
         op.send_match = send_op
         return op
 
+    def add_compute(self, opname, rank, ref, tb):
+        op = Op(Instruction.compute, rank, ref, ref, next=set(), prev=set(), tb=tb, channel=-1)
+        buffer = ref.buffer
+        index = ref.index
+        size = ref.size
+        self._write(rank, buffer, index, size, op, read=True)
+        return op
+
     def convert_set_list(self):
         ops = []
         for slot, op in self.operations.items():

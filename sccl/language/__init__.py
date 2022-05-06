@@ -325,6 +325,14 @@ class Ref(ChunkRef):
 
         return None
 
+    # A local inplace compute operation on a chunk
+    # TODO: For now only layernorm
+    def compute(self, op, tb=-1):
+        chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
+        # TODO: Mutate chunks
+        self.prog.instr_dag.add_compute(op, self.rank, self, tb)
+        return self
+
 
     def get_origin_index(self, index=0):
         return self._get_chunk(index + self.index).origin_index
