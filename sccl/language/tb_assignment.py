@@ -118,7 +118,7 @@ def topo_sort_instrs(rank_dag):
         if op.inst == Instruction.start:
             visited.add(op)
             for o in op.next:
-                if o.inst == Instruction.send or o.inst == Instruction.copy:
+                if not o.is_recv():
                     heapq.heappush(ops, ((-o.priority, o.dst.index), o))
 
     while len(ops) > 0:

@@ -78,7 +78,8 @@ class Instruction(Enum):
     reduce = 're'
     delete = 'd' 
     start = 'st'
-    compute = 'layernorm' # TODO: Temporary - only layernorm
+    ln = 'ln' # TODO: Temporary 
+    resadd = 'add' # Temporary
 
     def __str__(self):
         return self.value

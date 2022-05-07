@@ -109,7 +109,7 @@ class InstructionDAG:
         self._write(rank, dstbuffer, dstindex, size, op)
         return op
 
-    # InstructionDAG - adds a redduce node
+    # InstructionDAG - adds a reduce node
     def add_reduce(self, rank, send_ref, recv_ref, tb, ch):
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
@@ -118,9 +118,9 @@ class InstructionDAG:
         srcindex = send_ref.index
         size = recv_ref.size
         prev_ops = []
-        # Sending part of reduce
+        # Reading part of reduce
         self._read(rank, srcbuffer, srcindex, size, op)
-        # Reduce part of copy
+        # Reduce/writing part of reduce
         self._write(rank, dstbuffer, dstindex, size, op, read=True)
         return op
 
@@ -154,7 +154,13 @@ class InstructionDAG:
         return op
 
     def add_compute(self, opname, rank, ref, tb):
-        op = Op(Instruction.compute, rank, ref, ref, next=set(), prev=set(), tb=tb, channel=-1)
+        if opname == 'layernorm':
+            instr = Instruction.ln
+        elif opname == 'residual-add':
+            instr = Instruction.resadd
+        else:
+            assert True
+        op = Op(instr, rank, ref, ref, next=set(), prev=set(), tb=tb, channel=-1)
         buffer = ref.buffer
         index = ref.index
         size = ref.size
