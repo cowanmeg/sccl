@@ -111,6 +111,10 @@ def auto_assign_tbs(rank_dag):
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 
 def topo_sort_instrs(rank_dag):
+
+    def priority(op):
+        return ((op.chunk_step, -op.priority, op.dst.index))
+
     visited = set()
     ops = []
     ordered = []
@@ -119,7 +123,7 @@ def topo_sort_instrs(rank_dag):
             visited.add(op)
             for o in op.next:
                 if not o.is_recv():
-                    heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
+                    heapq.heappush(ops, (priority(o), o))
 
     while len(ops) > 0:
         _, op = heapq.heappop(ops)
@@ -131,11 +135,12 @@ def topo_sort_instrs(rank_dag):
             
             # Add a matching receive if one exists and it's dependencies are satisfied
             if rmatch is not None and all([x in visited for x in rmatch.prev]): 
-                heapq.heappush(ops, ((op.chunk_step, -op.priority+1, rmatch.dst.index), rmatch))
+                heapq.heappush(ops, (priority(rmatch), rmatch))
             # Add other operation that has its dependencies satisfied
             for o in op.next:
                 if all([x in visited for x in o.prev]):
-                    heapq.heappush(ops, ((o.chunk_step, -o.priority, o.dst.index), o))
+                    heapq.heappush(ops, (priority(o), o))
+
     # for o in ordered:
     #     print(o.priority, o.chunk_step, o)
     return ordered
