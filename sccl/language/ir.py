@@ -79,7 +79,7 @@ class Instruction(Enum):
     delete = 'd' 
     start = 'st'
     ln = 'ln' # TODO: Temporary 
-    resadd = 'add' # Temporary
+    resadd = 'ra' # Temporary
 
     def __str__(self):
         return self.value

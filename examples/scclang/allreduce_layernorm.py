@@ -34,7 +34,7 @@ def allreduce_allpairs(instances):
             # Layernorm on the fully reduced chunk
             # Assumes layernorm is inplace and the input and output are same size. 
             c = chunk(r, Buffer.input, r*8, size=8)
-            c.compute('layernorm', tb=0)
+            c.compute('layernorm', tb=0) # dst buffer, index
         
         # Each rank sends the fully reduced nth chunk to all other gpus
         # TODO: Allgather is half the size now. Figure out where to add this to language.
