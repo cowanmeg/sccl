@@ -23,7 +23,7 @@ def allreduce_allpairs(instances):
                 if r1 != r2:
                     c.send(r2, 'scratch', sendtb=r2, recvtb=r1, ch=0)
                 else:
-                    c.compute('residual-add', tb=r2)
+                    c.compute('residual-add', Buffer.input, index, tb=r2)
 
         # Each rank performs a local reduction on the nth chunk
         # Utilize 8 threadblocks for this reduction for better parallelism
@@ -34,15 +34,16 @@ def allreduce_allpairs(instances):
             # Layernorm on the fully reduced chunk
             # Assumes layernorm is inplace and the input and output are same size. 
             c = chunk(r, Buffer.input, r*8, size=8)
-            c.compute('layernorm', tb=0) # dst buffer, index
+            # Layernorm output size is half the input size
+            c.compute('layernorm', Buffer.output, r*4, tb=0) # dst buffer, index
         
         # Each rank sends the fully reduced nth chunk to all other gpus
-        # TODO: Allgather is half the size now. Figure out where to add this to language.
         for r1 in range(size):
             for r2 in range(size):
-                index = r1 * 8
-                c = chunk(r1, Buffer.input, index, 4)
-                c.send(r2, Buffer.output, r1*4, sendtb=r2, recvtb=r1)
+                if r1 != r2:
+                    index = r1 * 4
+                    c = chunk(r1, Buffer.output, index, 4)
+                    c.send(r2, Buffer.output, r1*4, sendtb=r2, recvtb=r1)
                 
         XML()
         # Check() # TODO: Checks for computation
