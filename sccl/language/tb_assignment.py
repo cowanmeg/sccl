@@ -12,7 +12,6 @@ from sccl.language.rank_dag import *
 def _verify_tb_op_compatible(tb, op):
     s = op.dst.rank if op.is_send() else -1
     r = op.src.rank if op.is_recv() else -1
-        
     sends_ok = tb.send == s or s == -1 or tb.send == -1
     recvs_ok = tb.recv == r or r == -1 or tb.recv == -1
     channel_ok = tb.channel == op.channel or tb.channel == -1 or op.channel == -1

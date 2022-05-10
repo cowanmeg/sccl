@@ -156,17 +156,20 @@ class InstructionDAG:
     def add_compute(self, opname, rank, src_ref, dst_ref, tb):
         if opname == 'layernorm':
             instr = Instruction.ln
+            read_size = src_ref.size
+            write_size = read_size // 2
         elif opname == 'residual-add':
             instr = Instruction.resadd
+            read_size = src_ref.size
+            write_size = read_size
         else:
             assert True
         op = Op(instr, rank, src_ref, dst_ref, next=set(), prev=set(), tb=tb, channel=-1)
-        size = src_ref.size
         if src_ref == dst_ref:
-            self._write(rank, dst_ref.buffer, dst_ref.index, size, op, read=True)
+            self._write(rank, dst_ref.buffer, dst_ref.index, read_size, op, read=True)
         else:
-            self._read(rank, src_ref.buffer, src_ref.index, size, op)
-            self._write(rank, dst_ref.buffer, dst_ref.index, size, op)
+            self._read(rank, src_ref.buffer, src_ref.index, read_size, op)
+            self._write(rank, dst_ref.buffer, dst_ref.index, write_size, op)
         return op
 
     def convert_set_list(self):
