@@ -39,7 +39,7 @@ def resadd_ar_layernorm(instances):
             # Assumes layernorm is inplace and the input and output are same size. 
             c = chunk(r, Buffer.input, r*8, size=8)
             # Layernorm output size is half the input size
-            c.compute('layernorm', Buffer.output, r*4, tb=r) # dst buffer, index
+            c.compute('layernorm', Buffer.output, r*4, tb=0) # dst buffer, index
         
         # Each rank sends the fully reduced nth chunk to all other gpus
         instance_size = chunksperloop // size // instances // 2
