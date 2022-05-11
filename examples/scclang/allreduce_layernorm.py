@@ -26,8 +26,8 @@ def resadd_ar_layernorm(instances):
                     c = chunk(r1, Buffer.input, index, size=instance_size)
                     if r1 != r2:
                         c.send(r2, 'scratch', sendtb=r2 + i * 8, recvtb=r1 + i * 8, ch=0)
-                    else:
-                        c.compute('residual-add', Buffer.input, index, tb=r2)
+                    # else:
+                    #     c.compute('residual-add', Buffer.input, index, tb=r2)
 
         # Each rank performs a local reduction on the nth chunk
         # Utilize 8 threadblocks for this reduction for better parallelism
