@@ -327,11 +327,11 @@ class Ref(ChunkRef):
 
     # A local inplace compute operation on a chunk
     # TODO: For now only layernorm
-    def compute(self, opname, buffer, index, tb=-1):
+    def compute(self, opname, buffer, index, tb=-1, ch=-1):
         chunks = self.prog.get_chunks(self.rank, self.buffer, self.index, self.size)
         dst_ref = self.prog.get_ref(self.rank, buffer, index, self.size)
         # TODO: indicate chunk has computation
-        self.prog.instr_dag.add_compute(opname, self.rank, self, dst_ref, tb)
+        self.prog.instr_dag.add_compute(opname, self.rank, self, dst_ref, tb, ch)
         return self
 
 

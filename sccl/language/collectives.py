@@ -224,3 +224,37 @@ class ReduceScatter(Collective):
         else:
             return buffer, index
 
+class Custom(Collective):
+
+    def __init__(self, num_ranks, chunk_factor, inplace):
+        Collective.__init__(self, num_ranks, chunk_factor, inplace)
+        self.name = 'custom'
+
+    def init_buffers(self):
+        chunks_per_node = self.chunk_factor
+        rank_buffers = []
+        for r in range(self.num_ranks):
+            input_buffer = []
+            output_buffer = [None] * chunks_per_node
+            for c in range(chunks_per_node):
+                # Chunks start at rank r index c, and ends on all ranks (-1) at index r
+                input_buffer.append(Chunk(r, c, -1, c))
+            # Input and output buffer are the same.
+            if self.inplace:
+                buffers = {Buffer.input : input_buffer, 
+                           Buffer.output : input_buffer}
+            else:
+                buffers = {Buffer.input : input_buffer, 
+                           Buffer.output : output_buffer}
+            rank_buffers.append(buffers)
+        return rank_buffers
+
+    def check(self, prog):
+        print("Warning no checker!")
+        return correct
+
+    def get_buffer_index(self, rank, buffer, index):
+        if self.inplace and buffer == Buffer.output:
+            return Buffer.input, index
+        else:
+            return buffer, index

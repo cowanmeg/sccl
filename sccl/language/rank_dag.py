@@ -153,7 +153,7 @@ class InstructionDAG:
         op.send_match = send_op
         return op
 
-    def add_compute(self, opname, rank, src_ref, dst_ref, tb):
+    def add_compute(self, opname, rank, src_ref, dst_ref, tb, ch):
         if opname == 'layernorm':
             instr = Instruction.ln
             read_size = src_ref.size
@@ -164,7 +164,7 @@ class InstructionDAG:
             write_size = read_size
         else:
             assert True
-        op = Op(instr, rank, src_ref, dst_ref, next=set(), prev=set(), tb=tb, channel=-1)
+        op = Op(instr, rank, src_ref, dst_ref, next=set(), prev=set(), tb=tb, channel=ch)
         if src_ref == dst_ref:
             self._write(rank, dst_ref.buffer, dst_ref.index, read_size, op, read=True)
         else:

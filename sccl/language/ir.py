@@ -289,7 +289,8 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     after_ops.append(op)
                 else:
                     pre_ops.append(op)
-            first_re.depends = [first_dep]
+            if first_dep is not None:
+                first_re.depends = [first_dep]
             tb.ops = pre_ops + after_ops
 
     # Do some additional postprocessing of operations:
