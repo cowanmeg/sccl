@@ -9,7 +9,7 @@ from sccl.language.collectives import Custom
 
 def resadd_ar_layernorm_v1(instances):
     size = 8
-    chunksperloop = 64 * instances
+    chunksperloop = 64
     topology = fully_connected(size)
     collective = Custom(size, chunksperloop, False)
 
@@ -35,12 +35,11 @@ def resadd_ar_layernorm_v1(instances):
 
         # Each rank performs a local reduction on the nth chunk
         # Utilize 8 threadblocks for this reduction for better parallelism
-        for i in range(instances):
-            for r in range(size):
-                for ci in range(0, 56):
-                    index = i * 56 + ci
-                    c = chunk(r, 'scratch', index)
-                    c.reduce(r, Buffer.input, r*8 + (index % 8), sendtb=(index % 8)*instances + i, ch=i)
+        for r in range(size):
+            for ci in range(0, 56):
+                index = ci
+                c = chunk(r, 'scratch', index)
+                c.reduce(r, Buffer.input, r*8 + (index % 8), sendtb=(index % 8) * instances, ch=0)
 
         for r in range(size):
             # Layernorm on the fully reduced chunk
