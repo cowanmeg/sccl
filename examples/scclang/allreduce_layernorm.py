@@ -252,6 +252,6 @@ parser.add_argument('version', type=str, choices=['inplace-add', 'outofplace-add
 args = parser.parse_args()
 assert args.instances >= 1 and args.instances <= 4
 if args.version == 'inplace-add':
-    ar_resadd(args.instances)
-else:
     resadd_ar(args.instances)
+else:
+    ar_resadd(args.instances)
