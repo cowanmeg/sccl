@@ -67,7 +67,7 @@ def resadd_ar_layernorm_v1(instances):
     collective = FusedAllReduceAddLayernorm(size, chunksperloop, False)
 
     with SCCLProgram("allreduce_layernorm", topology, collective, 1, protocol="LL", 
-        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual, instr_fusion=True):
+        interleaved_replication=True, threadblock_policy=ThreadblockPolicy.manual, instr_fusion=True):
 
         # Each rank sends the nth chunk to the nth rank into scratch space
         instance_size = chunksperloop // size // instances
@@ -215,7 +215,7 @@ def resadd_ar(instances):
     topology = fully_connected(size)
     collective = FusedAllReduceAddLayernorm(size, chunksperloop, False)
     with SCCLProgram("resadd_allreduce", topology, collective, instances, protocol="LL", 
-        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual):
+        interleaved_replication=True, threadblock_policy=ThreadblockPolicy.manual):
         
         # Each rank sends the nth chunk to the nth rank into scratch space
         for r1 in range(size):
