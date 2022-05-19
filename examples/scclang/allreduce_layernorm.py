@@ -4,7 +4,7 @@
 import argparse
 from sccl.language import *
 from sccl.topologies import *
-from sccl.language.collectives import Collective
+from sccl.language.collectives import Collective, AllReduce
 
 class FusedAllReduceAddLayernorm(Collective):
 
@@ -211,39 +211,48 @@ def ar_resadd(instances):
 
 def resadd_ar(instances):
     size = 8
-    chunksperloop = 64
+    chunksperloop = 64 * instances
     topology = fully_connected(size)
-    collective = FusedAllReduceAddLayernorm(size, chunksperloop, False)
-    with SCCLProgram("resadd_allreduce", topology, collective, instances, protocol="LL", 
-        interleaved_replication=True, threadblock_policy=ThreadblockPolicy.manual):
+    # collective=AllReduce(size, chunksperloop, True)
+    collective = FusedAllReduceAddLayernorm(size, chunksperloop, True)
+    with SCCLProgram("resadd_allreduce", topology, collective, 1, protocol="LL", 
+        interleaved_replication=False, threadblock_policy=ThreadblockPolicy.manual):
         
         # Each rank sends the nth chunk to the nth rank into scratch space
+        csize = 8 * instances
+        isize = 8
         for r1 in range(size):
             for r2 in range(size):
-                index = r2 * 8
-                c = chunk(r1, Buffer.input, index, size=8)
-                if r1 != r2:
-                    c.send(r2, 'scratch', sendtb=r2, recvtb=r1, ch=0)
-                else:
-                    c.compute('residual-add', Buffer.input, index, tb=r2)
+                for i in range(instances):
+                    index = r2 * csize + i * isize
+                    c = chunk(r1, Buffer.input, index, size=8)
+                    if r1 != r2:
+                        c.send(r2, 'scratch', sendtb=r2*instances+i, recvtb=r1*instances+i, ch=i)
+                    else:
+                        c.compute('residual-add', Buffer.input, index, tb=r2*instances+i, ch=i)
 
         # Each rank performs a local reduction on the nth chunk
         # Utilize 8 threadblocks for this reduction for better parallelism
         for r in range(size):
-            for index in range(0, 56):
-                c = chunk(r, 'scratch', index)
-                c.reduce(r, Buffer.input, r*8 + (index % 8), sendtb=(index % 8), ch=0)
+            for cc in range(0, 56):
+                for i in range(instances):
+                    index = cc * instances + i
+                    c = chunk(r, 'scratch', index)
+                    dstindx =  r*csize + (cc % 8) * instances + i
+                    tb = index % 16
+                    c.reduce(r, Buffer.input, dstindx, sendtb=tb, ch=i)
         
         # Each rank sends the fully reduced nth chunk to all other gpus
-        instance_size = chunksperloop // size // instances 
-        for r1 in range(size):
-            for r2 in range(size):
-                if r1 != r2:
-                    index = r1 * 8
-                    c = chunk(r1, Buffer.input, index, 8)
-                    c.send(r2, Buffer.input, index, sendtb=r2, recvtb=r1)
+        for i in range(instances):
+            for r1 in range(size):
+                for r2 in range(size):
+                    if r1 != r2:
+                        index = r1 * csize + i * isize
+                        c = chunk(r1, Buffer.input, index, 8)
+                        c.send(r2, Buffer.input, index, sendtb=r2*instances+i, recvtb=r1*instances+i, ch=i)
                 
         XML()
+        Check()
 
 
 parser = argparse.ArgumentParser()
