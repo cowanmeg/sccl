@@ -68,8 +68,10 @@ def allreduce_ring(size, instances, channels, protocol):
             for index in range(0, size):
                 rank = (index + step) % size
                 c = chunk(rank, Buffer.input, index)
-                next_rank = (index + step + 1) % size
                 channel = index%channels
+                if step == 0:
+                    c = c.compute('residual-add', Buffer.input, index, tb=channel, ch=channel)
+                next_rank = (index + step + 1) % size
                 c = c.reduce(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
         # Propagate ring
         for step in range(-1, size-2):
@@ -79,9 +81,6 @@ def allreduce_ring(size, instances, channels, protocol):
                 next_rank = (index + step + 1) % size
                 channel = index%channels
                 c = c.send(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
-                # After we get the fully reduced chunk - handle the residual add
-                if step == size-3:
-                    c.compute('residual-add', Buffer.input, index, tb=channel, ch=channel)
                
         XML()
         Check()
