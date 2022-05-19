@@ -87,10 +87,11 @@ def allreduce_ring(size, instances, channels, protocol):
 
 
 parser = argparse.ArgumentParser()
+parser.add_argument('num_gpus', type=int, help ='number of gpus')
 parser.add_argument('channels', type=int, help='number of channels per ring')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: LL128')
 
 args = parser.parse_args()
 
-allreduce_ring(8, args.instances, args.channels, args.protocol)
+allreduce_ring(args.num_gpus, args.instances, args.channels, args.protocol)
