@@ -254,13 +254,43 @@ def resadd_ar(instances):
         XML()
         Check()
 
+def allreduce_ring(size, instances, channels, protocol):
+    topology = fully_connected(size)
+    collective = AllReduce(size, size, True)
+    with SCCLProgram(f"allreduce_ring_{channels}channelsperring", topology, collective, instances,
+         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual):
+        # Reduce ring
+        for step in range(0, size-1):
+            for index in range(0, size):
+                rank = (index + step) % size
+                c = chunk(rank, Buffer.input, index)
+                next_rank = (index + step + 1) % size
+                channel = index%channels
+                c = c.reduce(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+        # Propagate ring
+        for step in range(-1, size-2):
+            for index in range(0, size):
+                rank = (index + step) % size
+                c = chunk(rank, Buffer.input, index)
+                next_rank = (index + step + 1) % size
+                channel = index%channels
+                c = c.send(next_rank, Buffer.input, index, ch=channel, recvtb=channel, sendtb=channel)
+                # After we get the fully reduced chunk - handle the residual add
+                if step == size-3:
+                    c.compute('residual-add', Buffer.input, index, tb=channel, ch=channel)
+               
+        XML()
+        Check()
+
 
 parser = argparse.ArgumentParser()
 parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('channels', type=int, help='number of channels per ring')
 parser.add_argument('version', type=str, choices=['inplace-add', 'outofplace-add'], help='which version of fused allreduce/layernorm')
 args = parser.parse_args()
 assert args.instances >= 1 and args.instances <= 4
-if args.version == 'inplace-add':
-    resadd_ar(args.instances)
-else:
-    ar_resadd(args.instances)
+# if args.version == 'inplace-add':
+#     resadd_ar(args.instances)
+# else:
+#     ar_resadd(args.instances)
+allreduce_ring(8, args.instances, args.channels, 'Simple')
