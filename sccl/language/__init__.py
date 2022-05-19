@@ -23,7 +23,7 @@ def _curr():
 class SCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True, DAG_preprocess_func=None):
+            instr_fusion=True, check_xml=True, dependence_nop=False, DAG_preprocess_func=None):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -34,6 +34,7 @@ class SCCLProgram:
         self.interleaved_replication = interleaved_replication
         self.instr_fusion = instr_fusion
         self.check_xml = check_xml
+        self.dependence_nop = dependence_nop
         self.DAG_preprocess_func = DAG_preprocess_func
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
@@ -145,12 +146,15 @@ class SCCLProgram:
         self.instr_dag.lower_pt1(self.instances)
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
         if self.check_xml:
-            # Check generated SCCL-EF for correctness - no circular dependencies, sends and receives are ordered
+            # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
+    def generate_xml(self):
+        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
+    
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
@@ -171,7 +175,7 @@ def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
 
 def XML():
-   print(ir_to_xml(_curr().lower()))
+   print(_curr().generate_xml())
 
 def Check():
     return _curr().check()
