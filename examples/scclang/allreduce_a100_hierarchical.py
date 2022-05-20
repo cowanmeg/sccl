@@ -76,4 +76,7 @@ args = parser.parse_args()
 
 assert args.num_nodes == 2, "Only works for 2 nodes right now"
 
-allreduce_manual_schedule(8, args.num_nodes, args.instances, args.protocol)
+if args.schedule == 'manual':
+    allreduce_manual_schedule(8, args.num_nodes, args.instances, args.protocol)
+else:
+    allreduce_default_schedule(8, args.num_nodes, args.instances, args.protocol)
