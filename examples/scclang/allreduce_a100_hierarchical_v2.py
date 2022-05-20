@@ -7,7 +7,7 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllReduce
 
-def allreduce(num_local_gpus, num_nodes, instances, protocol, rs):
+def allreduce(num_local_gpus, num_nodes, instances, protocol):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_gpus, True)
@@ -55,7 +55,6 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
-parser.add_argument('--rs', type=str, default='ring', choices=['ring', 'allpairs'], help='Reduce scatter algorithm')
 args = parser.parse_args()
 
-allreduce(8, args.num_nodes, args.instances, args.protocol, args.rs)
+allreduce(8, args.num_nodes, args.instances, args.protocol)
