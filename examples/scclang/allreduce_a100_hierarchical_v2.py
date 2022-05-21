@@ -15,7 +15,8 @@ def allreduce(num_local_gpus, num_nodes, instances, protocol):
     def rank(n, g):
         return (n % num_nodes) * num_local_gpus + (g % num_local_gpus)
 
-    with SCCLProgram("allreduce_multinode_a100", topology, collective, instances, protocol=protocol):
+    with SCCLProgram("allreduce_multinode_a100", topology, collective, instances, protocol=protocol, 
+        interleaved_replication=False):
 
         # Ring Reduce Scatter within each node
         local_chunk_size = num_nodes
