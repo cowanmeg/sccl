@@ -36,10 +36,10 @@ def allreduce(num_local_gpus, num_nodes, instances, protocol):
                 for step in range(0, num_nodes-1):
                     other = chunk(rank(n+step+1, g), Buffer.input, index)
                     c = chunk(rank(n+step+2, g), Buffer.input, index)
-                    c.reduce(other)
+                    c.reduce(other, ch=g%2)
                 # Gather ring
                 for step in range(0, num_nodes-1):
-                    c = c.copy(rank(n+step+1, g), Buffer.input, index)
+                    c = c.copy(rank(n+step+1, g), Buffer.input, index, ch=g%2)
 
 
         # Ring All gather within each node

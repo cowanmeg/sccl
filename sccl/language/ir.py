@@ -42,6 +42,9 @@ class Threadblock:
     ops: list = field(default_factory=list)
     rbid: int = -1 # threadblock id of the receiver
 
+    step: int = 0 # State used for validation
+    buf_full: bool = False
+
     def __eq__(self, other):
         return self is other
 
@@ -52,7 +55,7 @@ class Threadblock:
 class ChunkInstruction(Enum):
     start = 'start'
     reduce = 'reduce'
-    send = 'send'
+    copy = 'copy'
 
     def __str__(self):
         return self.value
@@ -118,7 +121,7 @@ class Op:
     dst: ChunkRef
     depends: list = field(default_factory=list)
     step: int = -1 # Step in the TB
-    tb: int = -1 # TB this op is assigned to
+    tb: int = -1 # tbid this op is assigned to
     prev: list = field(default_factory=list) # List of instructions that happen before
     next: list = field(default_factory=list) # List of instructions that happen after
     num: int = -1

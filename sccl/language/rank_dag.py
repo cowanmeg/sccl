@@ -252,10 +252,10 @@ class InstructionDAG:
 
     def lower_pt1(self, instances):
         self.infer_dependencies()
-        self.lower_buffers(instances)
+        self.lower_buffers(1)
     
     def lower_pt2(self, instances, interleaved):
-        self.replicate(instances, interleaved)
+        self.replicate(1, interleaved)
         return self.lower_tbs()
 
 

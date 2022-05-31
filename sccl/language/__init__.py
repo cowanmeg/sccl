@@ -46,9 +46,11 @@ class SCCLProgram:
         for r in range(self.num_ranks):
             for index, chunk in enumerate(self.buffers[r][Buffer.input]):
                 buffer, index = self.collective.get_buffer_index(r, Buffer.input, index)
-                ref = self.get_ref(r, buffer, index, 1)
                 # self.chunk_dag.init_chunk(chunk, ref)
-                self.instr_dag.add_start(r, buffer, index, ref)
+                for i in range(instances):
+                    ref = self.get_ref(r, buffer, index*instances+i, 1)
+                    self.instr_dag.add_start(r, buffer, index*instances+i, ref)
+        self.trace = []
 
     def __enter__(self):
         global _current_program
@@ -127,8 +129,42 @@ class SCCLProgram:
     def check(self):
         return self.collective.check(self)
 
+    # Lowers the program trace into the Rank DAG
+    # If instances > 1 also instances the graph
+    def lower_rank_dag(self):
+
+        def instance_ref(ref, i):
+            index = ref.index* self.instances + ref.size * i
+            return Ref(ref.rank, ref.buffer,index, ref.size, ref.prog)
+
+        for op in self.trace:
+            sender = op.src.rank
+            receiver = op.dst.rank
+            for i in range(self.instances):
+                sendtb = op.sendtb * self.instances + i
+                recvtb = op.recvtb * self.instances + i
+                ch = op.ch * self.instances + i
+
+                src = instance_ref(op.src, i)
+                dst = instance_ref(op.dst, i)
+
+                if op.inst == ChunkInstruction.copy and sender != receiver:
+                    sop = self.instr_dag.add_send(sender, src, dst, sendtb, ch)
+                    rop = self.instr_dag.add_recv(receiver, src, dst, recvtb, ch, sop)
+                    sop.recv_match = rop
+                elif op.inst == ChunkInstruction.copy and sender == receiver:
+                    self.instr_dag.add_copy(sender, src, dst, sendtb, ch)
+                elif op.inst == ChunkInstruction.reduce and sender != receiver:
+                    sop = self.instr_dag.add_send(sender, src, dst, sendtb, ch)
+                    rop = self.instr_dag.add_recv_reduce_copy(receiver, src, dst, recvtb, ch, sop)
+                    sop.recv_match = rop
+                else:
+                    self.instr_dag.add_reduce(sender, src, dst, sendtb, ch)
+            
+
     # Lower program to XML
     def lower(self):
+        self.lower_rank_dag()
         # self.chunk_dag._complete_metadata()
         # self.chunk_dag.channel_assignment()
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
@@ -150,6 +186,7 @@ class SCCLProgram:
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.tbs)
             check_threadblock_ordering(self.instr_dag)
+            check_deadlock(self.instr_dag.tbs, self.instr_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
     def generate_xml(self):
@@ -241,26 +278,23 @@ class Ref(ChunkRef):
         # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
+        chunkop = ChunkOp(ChunkInstruction.copy, self, dst_chunkref, sendtb, recvtb, ch)
+        self.prog.trace.append(chunkop)
 
         # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
-        sender = self.rank
-        receiver = dst
-        if sender != receiver:
-            sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb, ch)
-            rop = self.prog.instr_dag.add_recv(receiver, self, dst_chunkref, recvtb, ch, sop)
-            sop.recv_match = rop
-        else:
-            self.prog.instr_dag.add_copy(sender, self, dst_chunkref, sendtb, ch)
+        # sender = self.rank
+        # receiver = dst
+        # if sender != receiver:
+        #     sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb, ch)
+        #     rop = self.prog.instr_dag.add_recv(receiver, self, dst_chunkref, recvtb, ch, sop)
+        #     sop.recv_match = rop
+        # else:
+        #     self.prog.instr_dag.add_copy(sender, self, dst_chunkref, sendtb, ch)
 
         return dst_chunkref
 
     # Reduces the chunk(s) referenced by other_chunkref into the chunk(s) referenced by this chunkref
     def reduce(self, other_chunkref, sendtb=-1, recvtb=-1, ch=-1):
-        # self.prog.check_buffer_exists(dst, buffer)
-
-        # Some inplace collectives have custom logic for buffers and index (ReduceScatter, AllGather)
-        # buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
-
         # Receive reduce copy
         dst = self.rank
         src = other_chunkref.rank
@@ -271,15 +305,18 @@ class Ref(ChunkRef):
         # chunks2 = self.prog.get_chunks(other_chunkref.rank, other_chunkref.buffer, other_chunkref.index self.size)
 
         self.prog.apply_reduce(src, other_chunkref.buffer, other_chunkref.index, dst, self.buffer, self.index, self.size)
+        
+        chunkop = ChunkOp(ChunkInstruction.reduce, other_chunkref, self, sendtb, recvtb, ch)
+        self.prog.trace.append(chunkop)
 
         # reduce_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         # self.prog.chunk_dag.add_reduce(chunks1, chunks2, reduce_chunks, self, dst_chunkref, sendtb, recvtb, ch)
-        if src != dst:
-            sop = self.prog.instr_dag.add_send(src, other_chunkref, self, sendtb, ch)
-            rop = self.prog.instr_dag.add_recv_reduce_copy(dst, other_chunkref, self, recvtb, ch, sop)
-            sop.recv_match = rop
-        else:
-            self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
+        # if src != dst:
+        #     sop = self.prog.instr_dag.add_send(src, other_chunkref, self, sendtb, ch)
+        #     rop = self.prog.instr_dag.add_recv_reduce_copy(dst, other_chunkref, self, recvtb, ch, sop)
+        #     sop.recv_match = rop
+        # else:
+        #     self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
 
         return self
 
@@ -348,6 +385,14 @@ class Ref(ChunkRef):
     def print_chunk_info(self, index=0):
         print(self._get_chunk(index + self.index)) 
 
+@dataclass
+class ChunkOp():
+    inst: ChunkInstruction
+    src: Ref # Ref Chunk acted on
+    dst: Ref # Ref Chunk created
+    sendtb: int = -1
+    recvtb: int = -1
+    ch: int = -1
 
 # @dataclass
 # class ChunkOp():

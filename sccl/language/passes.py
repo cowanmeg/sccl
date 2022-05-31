@@ -4,7 +4,9 @@
 import sys
 from sccl.language.ir import *
 
-# Check that there are no cyclic dependencies within a Rank
+# Check that there are no cyclic dependencies within a rank
+# This check is a subset of the check_deadlock program to narrow
+# if deadlock is caused by explicit cross-threadblock dependencies inserted by the compiler
 def check_dependency_cycles(tbs):
     for rank, rank_tbs in enumerate(tbs):
         for tbid, tb in rank_tbs.items():
@@ -25,6 +27,78 @@ def check_dependency_cycles(tbs):
                     else:
                         chain = [op]
                     deps = next_depends + deps[1:]
+
+# Checks there are no deadlocks across the program
+# We assume the runtime tiles execution of the program so that the maximum program transfer unit
+# max(chunk_size * cnt) can fit into a connection's recv_buffer
+# We conservatively model the program as follows: an instruction can execute if all its explicit dependcies have executed and 
+# if it is a send that the recv_buffer on the receiving threadblock is empty
+# i.e. we model the recv_buffer as only able to hold chunks for one pending recv regardless if two recvs
+# could fit in the buffer. 
+def check_deadlock(tbs, rank_dag):
+    def finished(tbs):
+        fin = True
+        for rank, rank_tbs in enumerate(tbs):
+            for tbid, tb in rank_tbs.items():
+                if tb.step < len(tb.ops):
+                    return False
+        return True
+
+    executed = set()
+    progress = True
+    while progress and not finished(tbs):
+        progress = False
+        for rank, rank_tbs in enumerate(tbs):
+            for tbid, tb in rank_tbs.items():
+                blocked = False
+                while tb.step < len(tb.ops) and not blocked:
+                    op = tb.ops[tb.step]
+                    op_ready =  len(op.depends) == 0 or set(op.depends).issubset(executed)
+
+                    if op_ready and op.is_recv() and op.is_send():
+                        recv_tb = rank_dag.tbs[op.recv_match.rank][op.recv_match.tb]
+                        if recv_tb.buf_full:
+                            blocked = True
+                        else:
+                            # Simulate this rb revb buffer being emptied
+                            # and the corresponding recv_buffer being filled
+                            tb.buf_full = False
+                            recv_tb.buf_full = True
+                            progress = True
+                            executed.add(op)
+                            tb.step += 1
+
+                    elif op_ready and op.is_recv():
+                        # Simulate emptying the buffer
+                        tb.buf_full = False
+                        progress = True
+                        executed.add(op)
+                        tb.step += 1
+                    elif op_ready and op.is_send():
+                        recv_tb = rank_dag.tbs[op.recv_match.rank][op.recv_match.tb]
+                        if recv_tb.buf_full:
+                            blocked = True
+                        else:
+                            # Simulate the recv_buffer being filled
+                            recv_tb.buf_full = True
+                            progress = True
+                            executed.add(op)
+                            tb.step += 1
+                    else:
+                        blocked = True
+    
+    if not finished(tbs):
+        print("Deadlock from blocking sends")
+
+# Creates a dependency between a send and recv.
+# Add these edges to check if the program is valid for blocking sends
+def add_blocking_send_edges(tbs):
+    for rank, rank_tbs in enumerate(tbs):
+        for tbid, tb in rank_tbs.items():
+            for op_step, op in enumerate(tb.ops):
+                # If a send is blocking then it doesn't return until its recv happens
+                if op.is_send():
+                    op.depends.append(op.recv_match)
 
 
 # Check there are no ordering violations between threadblocks across ranks
@@ -53,3 +127,4 @@ def check_threadblock_ordering(rank_dag):
                             assert match.step >  prev_steps[other_tbid].step, f"Rank {op.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
                         
                     prev_steps[other_tbid] = match
+
