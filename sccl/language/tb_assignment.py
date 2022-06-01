@@ -22,7 +22,6 @@ def _verify_tb_op_compatible(tb, op):
 def manual_assign_tbs(rank_dag):
     instrs = topo_sort_instrs(rank_dag)
     for op in instrs:
-        
         rank = op.rank
         tbid = op.tb
         if tbid not in rank_dag.tbs[rank]:
@@ -127,6 +126,8 @@ def topo_sort_instrs(rank_dag):
             for o in op.next:
                 if all([x in visited for x in o.prev]):
                     heapq.heappush(ops, (priority(o), o))
+
+    rank_dag.ordered_instrs = ordered
     return ordered
 
 def channel_assignment(instrs, rank_dag):

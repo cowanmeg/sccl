@@ -50,19 +50,21 @@ def check_deadlock(tbs, rank_dag):
         progress = False
         for rank, rank_tbs in enumerate(tbs):
             for tbid, tb in rank_tbs.items():
-                blocked = False
-                while tb.step < len(tb.ops) and not blocked:
+                tb_blocked = False
+                while tb.step < len(tb.ops) and not tb_blocked:
                     op = tb.ops[tb.step]
                     op_ready =  len(op.depends) == 0 or set(op.depends).issubset(executed)
 
                     if op_ready and op.is_recv() and op.is_send():
                         recv_tb = rank_dag.tbs[op.recv_match.rank][op.recv_match.tb]
+                        # Simulate the receive happened
+                        tb.buf_full = False 
+
                         if recv_tb.buf_full:
-                            blocked = True
+                            # If the send can't happen - the instruction blocks
+                            tb_blocked = True
                         else:
-                            # Simulate this rb revb buffer being emptied
-                            # and the corresponding recv_buffer being filled
-                            tb.buf_full = False
+                            # Simulate the send portion
                             recv_tb.buf_full = True
                             progress = True
                             executed.add(op)
@@ -77,7 +79,7 @@ def check_deadlock(tbs, rank_dag):
                     elif op_ready and op.is_send():
                         recv_tb = rank_dag.tbs[op.recv_match.rank][op.recv_match.tb]
                         if recv_tb.buf_full:
-                            blocked = True
+                            tb_blocked = True
                         else:
                             # Simulate the recv_buffer being filled
                             recv_tb.buf_full = True
@@ -85,10 +87,10 @@ def check_deadlock(tbs, rank_dag):
                             executed.add(op)
                             tb.step += 1
                     else:
-                        blocked = True
+                        tb_blocked = True
     
     if not finished(tbs):
-        print("Deadlock from blocking sends")
+        print("ERROR!!!! Deadlock from blocking sends")
 
 # Creates a dependency between a send and recv.
 # Add these edges to check if the program is valid for blocking sends

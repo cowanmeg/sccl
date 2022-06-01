@@ -119,7 +119,7 @@ class Op:
     rank: int
     src: ChunkRef
     dst: ChunkRef
-    depends: list = field(default_factory=list)
+    depends: list = field(default_factory=list) # List of explicit dependencies - this is a subset of prev
     step: int = -1 # Step in the TB
     tb: int = -1 # tbid this op is assigned to
     prev: list = field(default_factory=list) # List of instructions that happen before
@@ -162,6 +162,12 @@ class Op:
     def is_local(self):
         return self.inst == Instruction.copy or \
             self.inst == Instruction.reduce
+
+    def is_reduce(self):
+        return self.inst == Instruction.reduce or \
+            self.inst == Instruction.recv_reduce_send or \
+            self.inst == Instruction.recv_reduce_copy or \
+            self.inst == Instruction.recv_reduce_copy_send
 
     def peer(self):
         if self.inst == Instruction.send:

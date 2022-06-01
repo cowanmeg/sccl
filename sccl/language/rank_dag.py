@@ -31,7 +31,7 @@ class InstructionDAG:
     def __init__(self, num_ranks, buffers):
         self.num_ranks = num_ranks
         self.buffers = buffers
-        # State for the actual instruction DAG
+        # State for the instruction DAG
         self.operations = {} # slot -> operations
         self.last_writer = {} # slot -> last writing op
         self.last_readers = defaultdict(list) # slot -> list of last reading ops
@@ -251,11 +251,12 @@ class InstructionDAG:
                 frontier = frontier[1:] + op.next
 
     def lower_pt1(self, instances):
-        self.infer_dependencies()
-        self.lower_buffers(1)
+        # self.infer_dependencies()
+        self.lower_buffers(instances)
     
     def lower_pt2(self, instances, interleaved):
-        self.replicate(1, interleaved)
+        self.replicate(instances, interleaved)
+        self.infer_dependencies()
         return self.lower_tbs()
 
 
@@ -319,8 +320,9 @@ class InstructionDAG:
         if instances == 1:
             self.instanced_tbs = self.tbs
             return 
-
+        
         self.instanced_tbs = []
+       
         for _ in range(self.num_ranks):
             self.instanced_tbs.append({})
 
@@ -339,41 +341,81 @@ class InstructionDAG:
             else:
                 return  len(self.buffers[rank][buffer]) * i + index
 
-        def get_instance_ref(ref):
+        def get_instance_ref(ref, i):
             iindex = get_new_index(ref.rank, ref.buffer, ref.index, ref.size, i)
             iref = ChunkRef(ref.rank, ref.buffer, iindex, ref.size)
             return iref
 
+        def add_instance_op(parent_op, i):
+            ichan = max_channels * i + parent_op.channel
+            itbid = parent_op.tb * instances + i
+            isrc = get_instance_ref(parent_op.src, i)
+            idst = get_instance_ref(parent_op.dst, i)
+
+            op = Op(parent_op.inst, parent_op.rank, isrc, idst, next=set(), prev=set(), step=parent_op.step, tb=itbid, channel=ichan)
+            dstbuffer = idst.buffer
+            dstindex = idst.index
+            srcbuffer = isrc.buffer
+            srcindex = isrc.index
+            size = idst.size
+            inst_read = op.is_reduce()
+
+            if op.is_fused(): # RRS RCS RRCS
+                self._write(rank, dstbuffer, dstindex, size, op, read=inst_read)
+                # self._read(rank, srcbuffer, srcindex, size, op)
+            elif op.is_local():
+                # Sending part of fused instruction [Read]
+                self._read(rank, srcbuffer, srcindex, size, op)
+                # Receiving part of fused instruction [Write]
+                self._write(rank, dstbuffer, dstindex, size, op, read=inst_read)
+            elif op.is_send(): # S
+                self._read(rank, srcbuffer, srcindex, size, op)
+            else: # RRC, R
+                self._write(rank, dstbuffer, dstindex, size, op, read=inst_read)
+            return op
+
+       
+
         max_channels = max(self.num_channels)
         for i in range(instances):
-            # Generate all the threadblocks and ops
+            # Generate all threadblocks and ops
             for rank, rank_tbs in enumerate(self.tbs):
                 # rank_channels = self.num_channels[rank]
                 for tbid, tb in rank_tbs.items():
                     instance_channel = max_channels * i + tb.channel
                     itb = Threadblock(instance_channel, tb.send, tb.recv)
                     itbid = tbid * instances + i
-                    itb.ops = [None] * len(tb.ops)
-                    for s, op in enumerate(tb.ops):
-                        isrc = get_instance_ref(op.src)
-                        idst = get_instance_ref(op.dst)
-                        idepends = [] 
-                        # Note: We don't need the fill out the rest of the metadata since replication is the last optimization
-                        iop = Op(op.inst, op.rank, isrc, idst, idepends, op.step, itbid) 
-                        itb.ops[s] = iop
-                    self.instanced_tbs[op.rank][itbid] = itb
-        
+                    self.instanced_tbs[rank][itbid] = itb
+
         # Redo dependency analysis
-        for rank, rank_tbs in enumerate(self.tbs):
-            for tbid, tb in rank_tbs.items():
-                for i in range(instances):
-                    itbid = tbid * instances + i
-                    itb = self.instanced_tbs[rank][itbid]
-                    for op, iop in zip(tb.ops, itb.ops):
-                        iop.depends = [None] * len(op.depends)
-                        for s, dep in enumerate(op.depends):
-                            dep_tbid = dep.tb
-                            dep_itbid = dep_tbid * instances + i
-                            dep_step = dep.step
-                            iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step] 
+        # 1. Build the instanced Rank DAG but with the threadblock/channel assignment of the base Rank DAG
+        # Clear prior state for building the DAG
+        self.operations = {} # slot -> operations
+        self.last_writer = {} # slot -> last writing op
+        self.last_readers = defaultdict(list) # slot -> list of last reading ops
+        # Initialize starting instanced chunks
+        for rank, rank_buffers in enumerate(self.buffers):
+            for bufname, buffer in rank_buffers.items():
+                for index in range(len(buffer)):
+                    for i in range(instances):
+                        ref = ChunkRef(rank, bufname, index*instances+i, 1)
+                        self.add_start(rank, bufname, index*instances+i, ref)
+        # Walk through the topological sort and build the instanced Rank DAG
+        for op in self.ordered_instrs:
+            for i in range(instances):
+                iop = add_instance_op(op, i)
+                self.instanced_tbs[op.rank][iop.tb].ops.append(iop)
+
+        # for rank, rank_tbs in enumerate(self.tbs):
+        #     for tbid, tb in rank_tbs.items():
+        #         for i in range(instances):
+        #             itbid = tbid * instances + i
+        #             itb = self.instanced_tbs[rank][itbid]
+        #             for op, iop in zip(tb.ops, itb.ops):
+        #                 iop.depends = [None] * len(op.depends)
+        #                 for s, dep in enumerate(op.depends):
+        #                     dep_tbid = dep.tb
+        #                     dep_itbid = dep_tbid * instances + i
+        #                     dep_step = dep.step
+        #                     iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step] 
 

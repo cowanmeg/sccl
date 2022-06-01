@@ -140,13 +140,13 @@ class SCCLProgram:
         for op in self.trace:
             sender = op.src.rank
             receiver = op.dst.rank
-            for i in range(self.instances):
-                sendtb = op.sendtb * self.instances + i
-                recvtb = op.recvtb * self.instances + i
-                ch = op.ch * self.instances + i
+            for i in range(1):
+                sendtb = op.sendtb 
+                recvtb = op.recvtb 
+                ch = op.ch 
 
-                src = instance_ref(op.src, i)
-                dst = instance_ref(op.dst, i)
+                src = op.src
+                dst = op.dst
 
                 if op.inst == ChunkInstruction.copy and sender != receiver:
                     sop = self.instr_dag.add_send(sender, src, dst, sendtb, ch)
@@ -180,13 +180,15 @@ class SCCLProgram:
         else:
             auto_assign_tbs(self.instr_dag)
         self.instr_dag.lower_pt1(self.instances)
-        gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
-        if self.check_xml:
-            # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
-            # For very large programs, turn off check_xml when shipping 
-            check_dependency_cycles(self.instr_dag.tbs)
-            check_threadblock_ordering(self.instr_dag)
-            # check_deadlock(self.instr_dag.tbs, self.instr_dag)
+        self.instr_dag.replicate(self.instances, self.interleaved_replication)
+        gpu_prgms = self.instr_dag.lower_tbs()
+
+        # if self.check_xml:
+        #     # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
+        #     # For very large programs, turn off check_xml when shipping 
+        #     check_dependency_cycles(self.instr_dag.tbs)
+        #     check_threadblock_ordering(self.instr_dag)
+        #     check_deadlock(self.instr_dag.tbs, self.instr_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
     def generate_xml(self):
