@@ -181,6 +181,8 @@ class SCCLProgram:
             auto_assign_tbs(self.instr_dag)
         self.instr_dag.lower_pt1(self.instances)
         self.instr_dag.replicate(self.instances, self.interleaved_replication)
+        self.instr_dag.convert_set_list()
+        self.instr_dag.infer_dependencies()
         gpu_prgms = self.instr_dag.lower_tbs()
 
         # if self.check_xml:

@@ -400,7 +400,9 @@ class InstructionDAG:
                     for i in range(instances):
                         ref = ChunkRef(rank, bufname, index*instances+i, 1)
                         self.add_start(rank, bufname, index*instances+i, ref)
+                        
         # Walk through the topological sort and build the instanced Rank DAG
+        # This recreates the dependencies
         for op in self.ordered_instrs:
             for i in range(instances):
                 iop = add_instance_op(op, i)
