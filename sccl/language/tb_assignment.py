@@ -8,7 +8,6 @@ import heapq
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
 
-
 def _verify_tb_op_compatible(tb, op):
     s = op.dst.rank if op.is_send() else -1
     r = op.src.rank if op.is_recv() else -1
@@ -19,21 +18,21 @@ def _verify_tb_op_compatible(tb, op):
     return sends_ok and recvs_ok and channel_ok
 
 # Manual threadblock, channel assignment
-def manual_assign_tbs(rank_dag):
-    instrs = topo_sort_instrs(rank_dag)
+def manual_assign_tbs(instr_dag):
+    instrs = topo_sort_instrs(instr_dag)
     for op in instrs:
         rank = op.rank
         tbid = op.tb
-        if tbid not in rank_dag.tbs[rank]:
-            rank_dag.tbs[rank][tbid] = Threadblock()
-        tb = rank_dag.tbs[rank][tbid]
+        if tbid not in instr_dag.tbs[rank]:
+            instr_dag.tbs[rank][tbid] = Threadblock()
+        tb = instr_dag.tbs[rank][tbid]
         if _verify_tb_op_compatible(tb, op):
             tb.ops.append(op)
             tb.channel = op.channel if op.channel != -1 else 0
             tb.send = op.dst.rank if op.is_send() else tb.send
             tb.recv = op.src.rank if op.is_recv() else tb.recv
             op.step = len(tb.ops)-1
-            rank_dag.num_channels[rank] = max(op.channel+1, rank_dag.num_channels[rank] )
+            instr_dag.num_channels[rank] = max(op.channel+1, instr_dag.num_channels[rank] )
         else:
             raise Exception(f"Illegal threadblock assignment. Trying to add {op} to threadblock {tbid}\n" \
                 f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
@@ -55,12 +54,12 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
              options.append(tbid)
     return options
 
-def auto_assign_tbs(rank_dag):
-    instrs = topo_sort_instrs(rank_dag)
-    channel_assignment(instrs, rank_dag)
-    rank_tbids = [0] * rank_dag.num_ranks
+def auto_assign_tbs(instr_dag):
+    instrs = topo_sort_instrs(instr_dag)
+    channel_assignment(instrs, instr_dag)
+    rank_tbids = [0] * instr_dag.num_ranks
     current_tb_step = []
-    for rank_tbs in rank_dag.tbs:
+    for rank_tbs in instr_dag.tbs:
         current_tb_step.append({})
 
     for op in instrs:
@@ -71,22 +70,22 @@ def auto_assign_tbs(rank_dag):
         channel = 0 if op.channel == -1 else op.channel
 
         # Get all possible TBs this can be mapped to
-        tb_options = _get_tb_options(rank_dag.tbs[rank], s, r, channel, rank_tbids[rank])
+        tb_options = _get_tb_options(instr_dag.tbs[rank], s, r, channel, rank_tbids[rank])
         if len(tb_options) == 0: # If there are no options, create a new threadblock
             tbid = rank_tbids[rank]
-            rank_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
+            instr_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
             rank_tbids[rank] += 1
         else: 
             tbid = tb_options[0]
             for tbid_opt in tb_options:
-                if current_tb_step[rank][tbid_opt] < current_tb_step[rank][tbid] and _verify_tb_op_compatible(rank_dag.tbs[rank][tbid], op):
+                if current_tb_step[rank][tbid_opt] < current_tb_step[rank][tbid] and _verify_tb_op_compatible(instr_dag.tbs[rank][tbid], op):
                     tbid = tbid_opt
         
-        tb = rank_dag.tbs[rank][tbid]
+        tb = instr_dag.tbs[rank][tbid]
         assert _verify_tb_op_compatible(tb, op), f"Failing: Operations uses channel {op.channel}, send:{s} recv:{r} {op}\n" \
                 f"Threadblock uses send:{tb.send} recv:{tb.recv} channel:{tb.channel}"
 
-        rank_dag.num_channels[rank] = max(rank_dag.num_channels[rank], channel+1)
+        instr_dag.num_channels[rank] = max(instr_dag.num_channels[rank], channel+1)
 
         tb.ops.append(op)
         tb.send = op.dst.rank if op.is_send() else tb.send
@@ -98,14 +97,14 @@ def auto_assign_tbs(rank_dag):
 
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 
-def topo_sort_instrs(rank_dag):
+def topo_sort_instrs(instr_dag):
     def priority(op):
         return ((op.chunk_step, -op.priority, op.dst.index))
 
     visited = set()
     ops = []
     ordered = []
-    for slot, op in rank_dag.operations.items():
+    for slot, op in instr_dag.operations.items():
         if op.inst == Instruction.start:
             visited.add(op)
             for o in op.next:
@@ -127,15 +126,15 @@ def topo_sort_instrs(rank_dag):
                 if all([x in visited for x in o.prev]):
                     heapq.heappush(ops, (priority(o), o))
 
-    rank_dag.ordered_instrs = ordered
+    instr_dag.ordered_instrs = ordered
     return ordered
 
-def channel_assignment(instrs, rank_dag):
+def channel_assignment(instrs, instr_dag):
     def all_channels():
         return set([x for x in range(32)])    # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
     # Then flow Rw->Rx->Rz must be ib a different channel c' where c!=c'
-    rank2sendch = [defaultdict(all_channels) for _ in range(rank_dag.num_ranks)]
-    rank2recvch = [defaultdict(all_channels) for _ in range(rank_dag.num_ranks)]
+    rank2sendch = [defaultdict(all_channels) for _ in range(instr_dag.num_ranks)]
+    rank2recvch = [defaultdict(all_channels) for _ in range(instr_dag.num_ranks)]
 
     # DFS through the InstructionDAG identifying flows
     def valid_send_ch(sender, receiver, ch):

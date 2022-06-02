@@ -89,9 +89,9 @@ class InstructionDAG:
             op.prev.add(prev_op)
 
     # InstructionDAG - builds the roots of the DAG
-    def add_start(self, rank, buffer, index, ref):
-        slot = (rank, buffer, index)
-        op = Op(Instruction.start, rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
+    def add_start(self, ref):
+        slot = (ref.rank, ref.buffer, ref.index)
+        op = Op(Instruction.start, ref.rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
         self.operations[slot] = op
         self.last_writer[slot] = op
 
@@ -251,12 +251,10 @@ class InstructionDAG:
                 frontier = frontier[1:] + op.next
 
     def lower_pt1(self, instances):
-        # self.infer_dependencies()
         self.lower_buffers(instances)
     
     def lower_pt2(self, instances, interleaved):
         self.replicate(instances, interleaved)
-        self.infer_dependencies()
         return self.lower_tbs()
 
 
@@ -351,8 +349,9 @@ class InstructionDAG:
             itbid = parent_op.tb * instances + i
             isrc = get_instance_ref(parent_op.src, i)
             idst = get_instance_ref(parent_op.dst, i)
+            rank = parent_op.rank
 
-            op = Op(parent_op.inst, parent_op.rank, isrc, idst, next=set(), prev=set(), step=parent_op.step, tb=itbid, channel=ichan)
+            op = Op(parent_op.inst, rank, isrc, idst, next=set(), prev=set(), step=parent_op.step, tb=itbid, channel=ichan)
             dstbuffer = idst.buffer
             dstindex = idst.index
             srcbuffer = isrc.buffer
@@ -374,13 +373,11 @@ class InstructionDAG:
                 self._write(rank, dstbuffer, dstindex, size, op, read=inst_read)
             return op
 
-       
 
         max_channels = max(self.num_channels)
+        # Generate all instanced threadblocks
         for i in range(instances):
-            # Generate all threadblocks and ops
             for rank, rank_tbs in enumerate(self.tbs):
-                # rank_channels = self.num_channels[rank]
                 for tbid, tb in rank_tbs.items():
                     instance_channel = max_channels * i + tb.channel
                     itb = Threadblock(instance_channel, tb.send, tb.recv)
@@ -399,25 +396,14 @@ class InstructionDAG:
                 for index in range(len(buffer)):
                     for i in range(instances):
                         ref = ChunkRef(rank, bufname, index*instances+i, 1)
-                        self.add_start(rank, bufname, index*instances+i, ref)
-                        
+                        self.add_start(ref)
+
         # Walk through the topological sort and build the instanced Rank DAG
-        # This recreates the dependencies
+        # Add instanced ops to their proper threadblocks
         for op in self.ordered_instrs:
             for i in range(instances):
                 iop = add_instance_op(op, i)
                 self.instanced_tbs[op.rank][iop.tb].ops.append(iop)
-
-        # for rank, rank_tbs in enumerate(self.tbs):
-        #     for tbid, tb in rank_tbs.items():
-        #         for i in range(instances):
-        #             itbid = tbid * instances + i
-        #             itb = self.instanced_tbs[rank][itbid]
-        #             for op, iop in zip(tb.ops, itb.ops):
-        #                 iop.depends = [None] * len(op.depends)
-        #                 for s, dep in enumerate(op.depends):
-        #                     dep_tbid = dep.tb
-        #                     dep_itbid = dep_tbid * instances + i
-        #                     dep_step = dep.step
-        #                     iop.depends[s] = self.instanced_tbs[op.rank][dep_itbid].ops[dep_step] 
-
+        self.convert_set_list()
+        self.infer_dependencies()
+    

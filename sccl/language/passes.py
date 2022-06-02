@@ -35,7 +35,7 @@ def check_dependency_cycles(tbs):
 # if it is a send that the recv_buffer on the receiving threadblock is empty
 # i.e. we model the recv_buffer as only able to hold chunks for one pending recv regardless if two recvs
 # could fit in the buffer. 
-def check_deadlock(tbs, rank_dag):
+def check_deadlock(tbs, instr_dag):
     def finished(tbs):
         fin = True
         for rank, rank_tbs in enumerate(tbs):
@@ -56,7 +56,7 @@ def check_deadlock(tbs, rank_dag):
                     op_ready =  len(op.depends) == 0 or set(op.depends).issubset(executed)
 
                     if op_ready and op.is_recv() and op.is_send():
-                        recv_tb = rank_dag.tbs[op.recv_match.rank][op.recv_match.tb]
+                        recv_tb = instr_dag.tbs[op.recv_match.rank][op.recv_match.tb]
                         # Simulate the receive happened
                         tb.buf_full = False 
 
@@ -77,7 +77,7 @@ def check_deadlock(tbs, rank_dag):
                         executed.add(op)
                         tb.step += 1
                     elif op_ready and op.is_send():
-                        recv_tb = rank_dag.tbs[op.recv_match.rank][op.recv_match.tb]
+                        recv_tb = instr_dag.tbs[op.recv_match.rank][op.recv_match.tb]
                         if recv_tb.buf_full:
                             tb_blocked = True
                         else:
@@ -104,9 +104,9 @@ def add_blocking_send_edges(tbs):
 
 
 # Check there are no ordering violations between threadblocks across ranks
-def check_threadblock_ordering(rank_dag):
-    for rank in range(rank_dag.num_ranks):
-        for tb in rank_dag.tbs[rank].values():
+def check_threadblock_ordering(instr_dag):
+    for rank in range(instr_dag.num_ranks):
+        for tb in instr_dag.tbs[rank].values():
             prev_steps = {} # tbid -> step of last recv from tbid
             # Check that sends and their corresponding receives between two threadblocks
             # happen in the same order.
@@ -124,7 +124,7 @@ def check_threadblock_ordering(rank_dag):
                             for op in tb.ops:
                                 print(f'{op.step}: Recv step: {op.recv_match.step if op.is_send() else -1} {op} priority:{(op.chunk_step, op.priority, op.dst.index)}')
                             print("Receiving tb")
-                            for op in rank_dag.tbs[match.rank][other_tbid].ops:
+                            for op in instr_dag.tbs[match.rank][other_tbid].ops:
                                 print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority, op.dst.index)}')
                             assert match.step >  prev_steps[other_tbid].step, f"Rank {op.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
                         
