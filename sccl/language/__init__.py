@@ -128,6 +128,12 @@ class SCCLProgram:
     def check(self):
         return self.collective.check(self)
 
+    def get_maxcount(self):
+        maxcount = 1
+        for op in self.trace:
+            maxcount = max(maxcount, op.src.size)
+        return maxcount
+
     # Lower program to XML
     def lower(self):
         # self.chunk_dag._complete_metadata()
@@ -152,8 +158,8 @@ class SCCLProgram:
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.instanced_tbs)
             check_threadblock_ordering(self.instr_dag)
-            check_deadlock(self.instr_dag.tbs, self.instr_dag)
-        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
+            # check_deadlock(self.instr_dag.tbs, self.instr_dag)
+        return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, self.get_maxcount(), gpu_prgms)  
 
     def generate_xml(self):
         return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
