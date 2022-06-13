@@ -68,15 +68,16 @@ def allreduce_default_schedule(num_local_gpus, num_nodes, instances, protocol):
         Check()
 
 parser = argparse.ArgumentParser()
+parser.add_argument('num_gpus', type=int, help='number of gpus per node')
 parser.add_argument('num_nodes', type=int, help='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
-parser.add_argument('--schedule', type=str, default='auto', choices=['auto', 'manual'], help='Protocol')
+parser.add_argument('--schedule', type=str, default='auto', choices=['auto', 'manual'], help='Different schedules')
 args = parser.parse_args()
 
 assert args.num_nodes == 2, "Only works for 2 nodes right now"
 
 if args.schedule == 'manual':
-    allreduce_manual_schedule(8, args.num_nodes, args.instances, args.protocol)
+    allreduce_manual_schedule(args.num_gpus, args.num_nodes, args.instances, args.protocol)
 else:
-    allreduce_default_schedule(8, args.num_nodes, args.instances, args.protocol)
+    allreduce_default_schedule(args.num_gpus, args.num_nodes, args.instances, args.protocol)
