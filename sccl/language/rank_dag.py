@@ -317,6 +317,7 @@ class InstructionDAG:
     def replicate(self, instances, interleaved):
         if instances == 1:
             self.instanced_tbs = self.tbs
+            self.infer_dependencies()
             return 
         
         self.instanced_tbs = []
