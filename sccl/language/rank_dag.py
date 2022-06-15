@@ -219,7 +219,7 @@ class InstructionDAG:
                         next_op.recv_match.send_match = op
                         op.recv_match = next_op.recv_match
                         remove_op(next_op)
-                        break
+                        break # Can only fuse one instruction
                 frontier = frontier[1:] + op.next
     # recv-reduce-send - A rrc followed by a send that gets overwritten
     # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di) 
@@ -231,8 +231,7 @@ class InstructionDAG:
             frontier = [ops]
             while len(frontier) > 0:
                 op = frontier[0]
-                if len(op.next) == 1:
-                    next_op = op.next[0]
+                for next_op in op.next:
                     if len(next_op.next) == 1:
                         nnext_op = next_op.next[0]
                         if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
