@@ -5,13 +5,13 @@ from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, protocol):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
-
+    instances = 1
         
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, 1, protocol=protocol):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, protocol=protocol):
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
@@ -34,8 +34,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, protocol):
                 for g1 in range(gpus_per_node):
                     rank = n1 * gpus_per_node + g1
                     ib_peer = n2 * gpus_per_node + g1
-                    c = chunk(rank, f'copy_{n2}', 0, 8)
-                    c = c.copy(ib_peer, Buffer.output, c.get_dst_index(), ch=((n1+n2) % 8)*2+(rank%2)+2)
+                    c = chunk(rank, f'copy_{n2}', 0, gpus_per_node)
+                    c = c.copy(ib_peer, Buffer.output, c.get_dst_index(), ch=((n1+n2) % gpus_per_node)*2+(rank%2)+2)
 
           
         # Handle local chunks within a node
@@ -52,8 +52,9 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, protocol):
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
+parser.add_argument('instances', type=int, help ='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.protocol)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.protocol)

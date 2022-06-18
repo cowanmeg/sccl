@@ -39,8 +39,7 @@ class Pipeline(Collective):
         return correct
 
 
-def pipeline(num_nodes, instances):
-    num_local_gpus = 8
+def pipeline(num_local_gpus, num_nodes, instances):
     chunks = num_local_gpus
     total_chunks_per_loop = chunks
     remote_bw = 1
@@ -88,9 +87,10 @@ def pipeline(num_nodes, instances):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
+    parser.add_argument('num_local_gpus', type=int, help ='number of gpus per node')
     parser.add_argument('num_nodes', type=int, help ='number of nodes')
     parser.add_argument('instances', type=int, help ='number of instances')
 
     args = parser.parse_args()
 
-    pipeline(args.num_nodes, args.instances)
+    pipeline(args.num_local_gpus, args.num_nodes, args.instances)
