@@ -131,6 +131,7 @@ class Op:
     recv_match =  None
     send_match =  None
     channel: int = -1
+    fused_dst: ChunkRef = None
 
     def cnt(self):
         if self.src:
@@ -179,7 +180,9 @@ class Op:
             return None
 
     def send_peer(self):
-        if self.is_send():
+        if self.is_send() and self.is_fused():
+            return self.fused_dst.rank
+        elif self.is_send():
             return self.dst.rank
         return -1
     

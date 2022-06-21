@@ -9,8 +9,8 @@ from sccl.language.ir import *
 from sccl.language.rank_dag import *
 
 def _verify_tb_op_compatible(tb, op):
-    s = op.dst.rank if op.is_send() else -1
-    r = op.src.rank if op.is_recv() else -1
+    s = op.send_peer() if op.is_send() else -1
+    r = op.recv_peer() if op.is_recv() else -1
         
     sends_ok = tb.send == s or s == -1 or tb.send == -1
     recvs_ok = tb.recv == r or r == -1 or tb.recv == -1
@@ -82,14 +82,14 @@ def auto_assign_tbs(instr_dag):
                     tbid = tbid_opt
         
         tb = instr_dag.tbs[rank][tbid]
-        assert _verify_tb_op_compatible(tb, op), f"Failing: Operations uses channel {op.channel}, send:{s} recv:{r} {op}\n" \
+        assert _verify_tb_op_compatible(tb, op), f"{op.rank} Failing: Operations uses channel {op.channel}, send:{s} recv:{r} {op}\n" \
                 f"Threadblock uses send:{tb.send} recv:{tb.recv} channel:{tb.channel}"
 
         instr_dag.num_channels[rank] = max(instr_dag.num_channels[rank], channel+1)
 
         tb.ops.append(op)
-        tb.send = op.dst.rank if op.is_send() else tb.send
-        tb.recv = op.src.rank if op.is_recv() else tb.recv
+        tb.send = s if op.is_send() else tb.send
+        tb.recv = r if op.is_recv() else tb.recv
         
         op.step = len(tb.ops)-1
         op.tb = tbid
@@ -146,6 +146,7 @@ def channel_assignment(instrs, instr_dag):
     def is_matching_flow(flow):
         # Exact match
         if flow in flows:
+            ch = flow_channels[flows.index(flow)]
             return flow_channels[flows.index(flow)]
         # Check if this flow is a subset of an existing flow
         # for existing_flow in flows:
@@ -229,6 +230,7 @@ def channel_assignment(instrs, instr_dag):
                         repeat = True
                         op.channel += 1
                         op.send_match.channel += 1
+                        print(f"+=1  to {op.channel}")
                         pr.remove(op)
 
 

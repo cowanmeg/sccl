@@ -113,7 +113,10 @@ def check_threadblock_ordering(instr_dag):
             for op_step, op in enumerate(tb.ops):
                 if op.is_send():
                     match = op.recv_match
-                    if match.is_recv():
+                    assert match.is_recv, "Bug in SCCLang: Send has no matching receive"
+                    if op.is_fused():
+                        assert op.fused_dst.rank == match.rank, f"Bug in SCCLang: Sends don't match receives"
+                    else:
                         assert op.dst.rank == match.rank, f"Bug in SCCLang: Sends don't match receives"
 
                     other_tbid = match.tb

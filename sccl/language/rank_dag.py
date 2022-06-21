@@ -215,7 +215,7 @@ class InstructionDAG:
                     if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         # recv -> rcs, remove send
                         op.inst = Instruction.recv_copy_send
-                        op.dst = next_op.dst
+                        op.fused_dst = next_op.dst # This is not necessary for the IR but used for correctness.
                         next_op.recv_match.send_match = op
                         op.recv_match = next_op.recv_match
                         remove_op(next_op)
@@ -236,14 +236,14 @@ class InstructionDAG:
                         nnext_op = next_op.next[0]
                         if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                             op.inst = Instruction.recv_reduce_send
-                            op.dst = next_op.dst
+                            op.fused_dst = next_op.dst 
                             next_op.recv_match.send_match = op
                             op.recv_match = next_op.recv_match
                             remove_op(next_op)
                     
                     if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
                         op.inst = Instruction.recv_reduce_copy_send
-                        op.dst = next_op.dst
+                        op.fused_dst = next_op.dst 
                         next_op.recv_match.send_match = op
                         op.recv_match = next_op.recv_match
                         remove_op(next_op)
