@@ -85,9 +85,13 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
         local_chunk_size = num_nodes
         if schedule == 'auto':
             for n in range(num_nodes):
-                ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_stride=2)
-            for n in range(num_nodes):
-                ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=1, chunk_stride=2)
+                for offset in range(num_nodes):
+                    ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes)
+
+            # for n in range(num_nodes):
+            #     ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_stride=2)
+            # for n in range(num_nodes):
+            #     ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=1, chunk_stride=2)
 
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
@@ -100,31 +104,32 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
 
             # All gather within each node
             for n in range(num_nodes):
-                ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_stride=2)
-            for n in range(num_nodes):
-                ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=1, chunk_stride=2)
+                for offset in range(num_nodes):
+                    ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes)
+            # for n in range(num_nodes):
+            #     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_stride=2)
+            # for n in range(num_nodes):
+            #     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=1, chunk_stride=2)
 
         else:
             # Reduce Scatter within each node
             for n in range(num_nodes):
-                ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_stride=2, chan=0)
-            for n in range(num_nodes):
-                ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=1, chunk_stride=2, chan=1)
+                for offset in range(num_nodes):
+                    ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes, chan=offset)
 
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
-                ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, chan=g%2+4)
+                ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, chan=g%2+num_nodes*2)
 
             # Cross node All-gather
             for g in range(num_local_gpus):
-                ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, chan=g%2+4)
+                ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, chan=g%2+num_nodes*2)
 
 
             # All gather within each node
             for n in range(num_nodes):
-                ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_stride=2, chan=2)
-            for n in range(num_nodes):
-                ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=1, chunk_stride=2, chan=3)
+                for offset in range(num_nodes):
+                    ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes, chan=offset+num_nodes)
 
         XML()
         Check()
