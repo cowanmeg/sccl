@@ -43,9 +43,6 @@ class Threadblock:
     ops: list = field(default_factory=list)
     rbid: int = -1 # threadblock id of the receiver
 
-    step: int = 0 # State used for validation
-    buf_full: bool = False
-
     def __eq__(self, other):
         return self is other
 

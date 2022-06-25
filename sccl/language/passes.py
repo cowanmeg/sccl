@@ -1,8 +1,89 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from collections import deque
 import sys
 from sccl.language.ir import *
+
+class SimulatedThreadblock:
+    def __init__(self, rank, tbid, tb, protocol):
+        self.rank = rank
+        self.tbid = tbid
+        self.tb = tb
+        self.protocol = protocol
+        self.remote_buffer = RemoteBuffer(protocol)
+        self.step = -1
+        self.chunks_remaining = 0
+
+    def instr_done(self):
+        # Finished when there are no chunks remaining 
+        return self.chunks_remaining == 0 
+
+    def next_inst(self):
+        if  self.instr_done() and self.step < len(self.tb)-1:
+            self.step += 1
+            self.chunks_remaining = self.tb[self.step].src.size
+        return self.tb[self.step]
+
+    # Simulates part of an instruction
+    # Assume the runtime can support up to 
+    # Returns whether or not progress was made, whether or not instruction finished
+    def simulate(self, recv_tb):
+        op = self.tb[self.step]
+        if op.is_recv() and op.is_send(): # RRCS, RRS, RCS
+            writeable_slots = recv_tb.remote_buffer.open_slots()
+            # readable_slots = self.remote_buffer.used_slots()
+            chunks_read = self.remote_buffer.read(min(self.chunks_remaining, writeable_slots))
+            chunks_processed = recv_tb.remote_buffer.write(chunks_read)
+        else:
+            if op.is_recv(): # RRC, R
+                chunks_processed = self.remote_buffer.read(self.chunks_remaining)
+            elif op.is_send(): # S
+                chunks_processed = recv_tb.remote_buffer.write(self.chunks_remaining)
+            else: # Local op
+                chunks_processed = self.chunks_remaining
+        self.chunks_remaining -= chunks_processed
+        return chunks_processed > 0, self.chunks_remaining == 0
+
+    def finished(self):
+        # Finished when the last instruction of the threadblock is done
+        return self.step == len(self.tb)-1 and self.instr_done()
+
+class RemoteBuffer:
+    def __init__(self, protocol, remotebuffer_mb=4):
+        if protocol == 'Simple':
+            self.slots = 2
+            self.slotsize = 4
+        elif protocol == 'LL128':
+            self.slots = 8
+            self.slotsize = 2
+        elif protocol == 'LL':
+            self.slots = 8
+            self.slotsize = 1
+        self.chunks = deque(maxlen=self.slots)
+
+    def used_slots(self):
+        return len(self.chunks)
+
+    def open_slots(self):
+        return self.slots - len(self.chunks)
+
+    # Returns the number of chunks written
+    def write(self, count):
+        c = 0
+        while (self.slots - len(self.chunks)) > 0 and c < count:
+            self.chunks.append(count)
+            c += 1
+        return c
+
+    # Returns the number of chunks read
+    def read(self, count):
+        c = 0
+        while len(self.chunks) >  0 and c < count:
+            self.chunks.pop()
+            c += 1
+        return c
+    
 
 # Check that there are no cyclic dependencies within a rank
 # This check is a subset of the check_deadlock program to narrow
@@ -35,62 +116,49 @@ def check_dependency_cycles(tbs):
 # if it is a send that the recv_buffer on the receiving threadblock is empty
 # i.e. we model the recv_buffer as only able to hold chunks for one pending recv regardless if two recvs
 # could fit in the buffer. 
-def check_deadlock(tbs, instr_dag):
+def check_deadlock(instr_dag, protocol):
+    # Program finishes when all threadblocks execute their instructions
     def finished(tbs):
-        fin = True
         for rank, rank_tbs in enumerate(tbs):
-            for tbid, tb in rank_tbs.items():
-                if tb.step < len(tb.ops):
+            for tb in rank_tbs:
+                if not tb.finished():
                     return False
         return True
 
+    # Create remote buffers for all threadblocks (for easy indexing assume everyone has a recv peer)
+    tbs = []
+    for rank, rtbs in enumerate(instr_dag.tbs):
+        rank_tbs = [None] * len(rtbs)
+        for tbid, tb in rtbs.items():
+            rank_tbs[tbid] = (SimulatedThreadblock(rank, tbid, tb.ops, protocol))
+        tbs.append(rank_tbs)
+    
     executed = set()
     progress = True
     while progress and not finished(tbs):
         progress = False
         for rank, rank_tbs in enumerate(tbs):
-            for tbid, tb in rank_tbs.items():
+            for tbid, tb in enumerate(rank_tbs):
                 tb_blocked = False
-                while tb.step < len(tb.ops) and not tb_blocked:
-                    op = tb.ops[tb.step]
+                while not tb.finished() and not tb_blocked:
+                    op = tb.next_inst()
                     op_ready =  len(op.depends) == 0 or set(op.depends).issubset(executed)
-
-                    if op_ready and op.is_recv() and op.is_send():
-                        recv_tb = instr_dag.tbs[op.recv_match.rank][op.recv_match.tb]
-                        # Simulate the receive happened
-                        tb.buf_full = False 
-
-                        if recv_tb.buf_full:
-                            # If the send can't happen - the instruction blocks
-                            tb_blocked = True
+                    if op_ready:
+                        if op.is_send():
+                            recv_tb = tbs[op.recv_match.rank][op.recv_match.tb]
                         else:
-                            # Simulate the send portion
-                            recv_tb.buf_full = True
-                            progress = True
+                            recv_tb = None
+                        tb_progress, instr_finished = tb.simulate(recv_tb)
+                        progress = progress or tb_progress
+                        tb_blocked = not tb_progress
+                        if instr_finished:
                             executed.add(op)
-                            tb.step += 1
-
-                    elif op_ready and op.is_recv():
-                        # Simulate emptying the buffer
-                        tb.buf_full = False
-                        progress = True
-                        executed.add(op)
-                        tb.step += 1
-                    elif op_ready and op.is_send():
-                        recv_tb = instr_dag.tbs[op.recv_match.rank][op.recv_match.tb]
-                        if recv_tb.buf_full:
-                            tb_blocked = True
-                        else:
-                            # Simulate the recv_buffer being filled
-                            recv_tb.buf_full = True
-                            progress = True
-                            executed.add(op)
-                            tb.step += 1
                     else:
                         tb_blocked = True
-    
+
     if not finished(tbs):
         print("ERROR!!!! Deadlock from blocking sends")
+
 
 # Creates a dependency between a send and recv.
 # Add these edges to check if the program is valid for blocking sends

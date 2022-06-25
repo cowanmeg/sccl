@@ -29,8 +29,8 @@ def manual_assign_tbs(instr_dag):
         if _verify_tb_op_compatible(tb, op):
             tb.ops.append(op)
             tb.channel = op.channel if op.channel != -1 else 0
-            tb.send = op.dst.rank if op.is_send() else tb.send
-            tb.recv = op.src.rank if op.is_recv() else tb.recv
+            tb.send = op.send_peer() if op.is_send() else tb.send
+            tb.recv = op.recv_peer() if op.is_recv() else tb.recv
             op.step = len(tb.ops)-1
             instr_dag.num_channels[rank] = max(op.channel+1, instr_dag.num_channels[rank] )
         else:
