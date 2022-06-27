@@ -2,6 +2,7 @@
 # Licensed under the MIT License.
 
 import argparse
+from concurrent.futures import thread
 
 from sccl.language import *
 from sccl.topologies import *
@@ -19,20 +20,20 @@ def alternate(x, offset=0):
     return f
 
 
-def ring_reduce_scatter(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, chanf=const_func(-1)):
+def ring_reduce_scatter(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, sendtbf=const_func(-1), recvtbf=const_func(-1), chanf=const_func(-1)):
     for ch in range(0, size):
         index = ch * chunk_stride * local_chunk_size + chunk_offset
         for step in range(0, size-1):
             other = chunk(((step+1+ch) % size)*rank_step +rank_offset, Buffer.input, index, local_chunk_size)
             c = chunk(((step+2+ch) % size)*rank_step+rank_offset, Buffer.input, index, local_chunk_size)
-            c.reduce(other, ch=chanf(index))
+            c.reduce(other, sendtb=sendtbf(index), recvtb=recvtbf(index), ch=chanf(index))
 
-def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, chanf=const_func(-1)):
+def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, sendtbf=const_func(-1), recvtbf=const_func(-1), chanf=const_func(-1)):
     for ch in range(0, size):
         index = ch * chunk_stride * local_chunk_size + chunk_offset
         for step in range(0, size-1):
             c = chunk(((step+ch) % size)*rank_step + rank_offset, Buffer.input, index, local_chunk_size)
-            c.copy(((step+1+ch) % size)*rank_step + rank_offset, Buffer.input, index, ch=chanf(index))
+            c.copy(((step+1+ch) % size)*rank_step + rank_offset, Buffer.input, index, sendtb=sendtbf(index), recvtb=recvtbf(index), ch=chanf(index))
 
 
 def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, schedule):
@@ -88,59 +89,78 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_gpus, True)
 
-
+    threadblock_policy = ThreadblockPolicy.auto if schedule == 'auto' else ThreadblockPolicy.manual
     with SCCLProgram("blueconnect", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False):
+        interleaved_replication=False, threadblock_policy=threadblock_policy):
 
         local_chunk_size = num_nodes
         if schedule == 'distribute':
-            local_ring_ch = num_nodes * num_local_gpus
-            cross_ring_ch = num_nodes
+            channels = num_gpus
             for n in range(num_nodes):
                 for offset in range(num_nodes):
                     ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, 
-                        chunk_stride=num_nodes, chanf=alternate(local_ring_ch))
+                        chunk_stride=num_nodes, chanf=alternate(channels), sendtbf=alternate(channels), recvtbf=alternate(channels))
 
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
                 ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=alternate(cross_ring_ch, local_ring_ch-2))
+                    chanf=alternate(channels), sendtbf=alternate(channels, channels), recvtbf=alternate(channels, channels))
 
             # Cross node All-gather
             for g in range(num_local_gpus):
                 ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=alternate(cross_ring_ch, local_ring_ch-2))
+                    chanf=alternate(channels), sendtbf=alternate(channels, channels), recvtbf=alternate(channels, channels))
 
 
             # All gather within each node
             for n in range(num_nodes):
                 for offset in range(num_nodes):
                     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, 
-                        chunk_stride=num_nodes, chanf=alternate(local_ring_ch))
+                        chunk_stride=num_nodes, chanf=alternate(channels), sendtbf=alternate(channels), recvtbf=alternate(channels))
            
-        else:
+        elif schedule == 'const':
             # Reduce Scatter within each node
             for n in range(num_nodes):
                 for offset in range(num_nodes):
                     ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes, 
-                        chanf=const_func(n))
+                        chanf=const_func(offset), sendtbf=const_func(offset), recvtbf=const_func(offset))
 
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
                 ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                chanf=const_func(g%2+num_nodes*2))
+                chanf=const_func(g%2), sendtbf=const_func(g+num_nodes), recvtbf=const_func(g+num_nodes))
 
             # Cross node All-gather
             for g in range(num_local_gpus):
                 ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=const_func(g%2+num_nodes*2))
+                    chanf=const_func(g%2), sendtbf=const_func(g+num_nodes), recvtbf=const_func(g+num_nodes))
 
 
             # All gather within each node
             for n in range(num_nodes):
                 for offset in range(num_nodes):
                     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, 
-                        chunk_stride=num_nodes, chanf=const_func(n+num_nodes))
+                        chunk_stride=num_nodes, chanf=const_func(offset), sendtbf=const_func(offset), recvtbf=const_func(offset))
+
+        else: # auto
+            # Reduce Scatter within each node
+            for n in range(num_nodes):
+                for offset in range(num_nodes):
+                    ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes)
+
+            # Cross node Reduce-Scatter
+            for g in range(num_local_gpus):
+                ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes)
+
+            # Cross node All-gather
+            for g in range(num_local_gpus):
+                ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes)
+
+
+            # All gather within each node
+            for n in range(num_nodes):
+                for offset in range(num_nodes):
+                    ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset,  chunk_stride=num_nodes)
 
         XML()
         Check()
@@ -183,7 +203,7 @@ parser.add_argument('num_nodes', type=int, help='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--version',type=str, default='v1', choices=['v1', 'v2'], help='v1=count 1 v2 = count2')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
-parser.add_argument('--schedule', type=str, default='const', choices=['distribute', 'const'], help='Scheduling')
+parser.add_argument('--schedule', type=str, default='const', choices=['distribute', 'const', 'auto'], help='Scheduling')
 
 args = parser.parse_args()
 

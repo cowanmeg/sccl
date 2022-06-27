@@ -158,7 +158,7 @@ class SCCLProgram:
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.instanced_tbs)
             check_threadblock_ordering(self.instr_dag)
-            check_deadlock(self.instr_dag, self.protocol)
+            # check_deadlock(self.instr_dag, self.protocol)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, self.get_maxcount(), gpu_prgms)  
 
     def generate_xml(self):
