@@ -12,11 +12,11 @@ from sccl.language.collectives import AllReduce
 # Assumes only two-level switches
 
 def const_func(x):
-    def f(chunk): return x
+    def f(index): return x
     return f
 
 def alternate(x, offset=0):
-    def f(chunk): return chunk % x + offset
+    def f(index): return (index % x) + offset
     return f
 
 
@@ -85,13 +85,60 @@ def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, sch
         Check()
 
 def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, schedule):
+    def fuse_critical_path(instr_dag):
+        def critical_chunk(rank):
+            n = rank // num_local_gpus
+            g = rank % num_local_gpus
+            return ((g-1) % num_local_gpus) * num_nodes + ((n-1) % num_nodes)
+        
+        for slot, op in instr_dag.operations.items():
+            rank, _, index = slot
+            critical_index = critical_chunk(rank)
+            print(slot, op.priority, critical_index)
+            # Maximally fuse the critical path.
+            # TODO: May fold-over itself?
+            if index == critical_index:
+                op = op.next[0]
+                print("Critical OP", op, index, 0)
+                f = {}
+                while op is not None:
+                    op.channel = index
+                    op.tb = index
+                    if op.recv_match:
+                        if op.rank in f and f[op.rank] != op.recv_match.rank:
+                            print(op.rank, "collides", f[op.rank], op.recv_match.rank)
+                        else:
+                            f[op.rank] = op.recv_match.rank
+                            print(op.rank, "sends to", f[op.rank])
+                    print("  ", op.recv_match)
+                    op = op.recv_match
+            # For every other chunk, fuse as much as possible
+            else:
+                op = op.next[0]
+                parent_op = op
+                print("", op, index, index+1)
+
+                while op is not None:
+                    op.channel = index
+                    op.tb = index
+                    print("  ", op.recv_match)
+                    op = op.recv_match
+                op = parent_op
+                while op is not None:
+                    # if len(op.next) > 1:
+                    #     print("FFFFFF")
+                    op.channel = index
+                    op.tb = index
+                    op = op.next[0] if len(op.next) > 0 else None
+                
+
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_gpus, True)
 
     threadblock_policy = ThreadblockPolicy.auto if schedule == 'auto' else ThreadblockPolicy.manual
     with SCCLProgram("blueconnect", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False, threadblock_policy=threadblock_policy):
+        interleaved_replication=False, threadblock_policy=threadblock_policy, DAG_preprocess_func=fuse_critical_path):
 
         local_chunk_size = num_nodes
         if schedule == 'distribute':
@@ -104,12 +151,12 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
                 ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=alternate(channels), sendtbf=alternate(channels, channels), recvtbf=alternate(channels, channels))
+                    chanf=alternate(num_nodes), sendtbf=alternate(num_nodes, channels), recvtbf=alternate(num_nodes, channels))
 
             # Cross node All-gather
             for g in range(num_local_gpus):
                 ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=alternate(channels), sendtbf=alternate(channels, channels), recvtbf=alternate(channels, channels))
+                    chanf=alternate(num_nodes), sendtbf=alternate(num_nodes, channels), recvtbf=alternate(num_nodes, channels))
 
 
             # All gather within each node
@@ -123,24 +170,25 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
             for n in range(num_nodes):
                 for offset in range(num_nodes):
                     ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes, 
-                        chanf=const_func(offset), sendtbf=const_func(offset), recvtbf=const_func(offset))
+                    chanf=const_func(offset), sendtbf=const_func(offset), recvtbf=const_func(offset))
 
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
                 ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                chanf=const_func(g%2), sendtbf=const_func(g+num_nodes), recvtbf=const_func(g+num_nodes))
+                chanf=const_func(g%2), sendtbf=const_func(g+num_nodes*2), recvtbf=const_func(g+num_nodes*2))
 
             # Cross node All-gather
             for g in range(num_local_gpus):
                 ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=const_func(g%2), sendtbf=const_func(g+num_nodes), recvtbf=const_func(g+num_nodes))
+                    chanf=const_func(g%2), sendtbf=const_func(g+num_nodes*2), recvtbf=const_func(g+num_nodes*2))
 
 
             # All gather within each node
+            # For large sizes, keep the allgather in separate channel/tb for better tiling overlap. 
             for n in range(num_nodes):
                 for offset in range(num_nodes):
-                    ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, 
-                        chunk_stride=num_nodes, chanf=const_func(offset), sendtbf=const_func(offset), recvtbf=const_func(offset))
+                    ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes, 
+                    chanf=const_func(offset+num_nodes), sendtbf=const_func(offset+num_nodes), recvtbf=const_func(offset+num_nodes))
 
         else: # auto
             # Reduce Scatter within each node

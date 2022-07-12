@@ -15,7 +15,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
-                # print(f"r {r} n1 {n1} n2 {n2}")
 
                 # Gather all local chunks for the node neighbor
                 for g1 in range(gpus_per_node):
