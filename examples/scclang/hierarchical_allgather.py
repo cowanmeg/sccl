@@ -3,9 +3,9 @@
 
 import argparse
 
-from msccl.language import *
-from msccl.topologies import *
-from msccl.language.collectives import AllGather
+from sccl.language import *
+from sccl.topologies import *
+from sccl.language.collectives import AllGather
 
 def const_func(x):
     def f(index): return x
@@ -35,8 +35,8 @@ def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra
     topology = fully_connected(num_gpus)
     collective = AllGather(num_gpus, 1, True)
 
-    with MSCCLProgram("hierarchical_allgather", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False):
+    with SCCLProgram("hierarchical_allgather", topology, collective, instances, protocol=protocol, 
+        interleaved_replication=True):
 
         local_chunk_size = num_nodes
         # Cross node All-gather
