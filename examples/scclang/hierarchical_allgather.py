@@ -15,14 +15,11 @@ def alternate(x, offset=0):
     def f(index): return (index % x) + offset
     return f
 
-def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, inplace=True, sendtb=const_func(-1), recvtb=const_func(-1), chan=const_func(-1)):
+def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, sendtb=const_func(-1), recvtb=const_func(-1), chan=const_func(-1)):
     for ch in range(0, size):
         index = ch * chunk_stride * local_chunk_size + chunk_offset
-        if inplace:
-            c = chunk(ch*rank_step + rank_offset, Buffer.output, index, local_chunk_size)
-        else:
-            c = c = chunk(ch*rank_step + rank_offset, Buffer.input, 0, local_chunk_size)
         for step in range(0, size-1):
+            c = chunk(((step+ch) % size)*rank_step + rank_offset, Buffer.output, index, local_chunk_size)
             c = c.copy(((step+1+ch) % size)*rank_step + rank_offset, Buffer.output, index, sendtb=sendtb(index), recvtb=recvtb(index), ch=chan(index))
 
 def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra_ch):
@@ -31,25 +28,27 @@ def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra
     inplace = False
     collective = AllGather(num_gpus, 1, inplace)
 
-    with SCCLProgram("hierarchical_allgather", topology, collective, instances, protocol=protocol, 
+    with SCCLProgram(f"hierarchical_allgather_{num_nodes}nodes_{intra_ch}ch_{instances}in", topology, collective, instances, protocol=protocol, 
         interleaved_replication=True):
 
         # Cross node All-gather 
         # Each (n, g) gpu N chunks at [g, g+G, g+G*2, ... g+G*(N-1)]
-        for g in range(num_local_gpus):
-            ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g, chunk_stride=num_local_gpus, 
-                sendtb=const_func(num_nodes*intra_ch), recvtb=const_func(num_nodes*intra_ch), inplace=inplace, chan=const_func(0))
         if not inplace:
             for g in range(num_gpus):
                 chunk(g, Buffer.input, 0).copy(g, Buffer.output, g)
+        for g in range(num_local_gpus):
+            ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g, chunk_stride=num_local_gpus, chan=const_func(g%2)
+                , sendtb=const_func(num_nodes*intra_ch+g%2), recvtb=const_func(num_nodes*intra_ch+g%2)
+                )
 
         # All gather within each node
         for n in range(num_nodes):
             # Each node needs to run N local rings since there are N scattered chunks after the allreduce
             for offset in range(num_nodes): 
                 ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, 
-                    chunk_offset=offset*num_local_gpus, chan=alternate(intra_ch, offset*intra_ch), 
-                    sendtb=alternate(intra_ch, offset*intra_ch), recvtb=alternate(intra_ch, offset*intra_ch))
+                    chunk_offset=offset*num_local_gpus, chan=alternate(intra_ch, offset*intra_ch)
+                    , sendtb=alternate(intra_ch, offset*intra_ch), recvtb=alternate(intra_ch, offset*intra_ch)
+                    )
 
         XML()
         Check()
