@@ -5,8 +5,6 @@ from dataclasses import dataclass
 from enum import Enum
 import heapq
 
-from numpy import insert
-
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
 
@@ -103,7 +101,7 @@ def priority(op):
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 
 def topo_sort_instrs(instr_dag):
-    insert_buffer_dependencies(instr_dag)
+    insert_connection_dependencies(instr_dag)
 
     visited = set()
     ops = []
@@ -213,62 +211,55 @@ def channel_assignment(instrs, instr_dag):
                 if o.inst == Instruction.send and o.recv_match.is_fused():
                     dfs(op, all_channels(), [])
 
-    # Iterate through and make certain the sends and receives between a pair of GPUs is consistent
-    # Shift a (s,r) pair to another channel if the ordering isn't consistent
-    repeat = True
-    while repeat:
-        repeat = False
-        pending_recv = defaultdict(list)  # (sender, receiver, ch) -> pending receive
-        for op in instrs:
-            rank = op.rank
-            channel = 0 if op.channel == -1 else op.channel
-            if op.is_send():
-                dst = op.dst.rank
-                pending_recv[(rank, dst, channel)].append(op.recv_match)
-            
-            if op.is_recv():
-                src = op.src.rank
-                pr = pending_recv[(src, rank, channel)]
-                if op in pr:
-                    if pr[0] is op:
-                        del pr[0]
-                    else:
-                        repeat = True
-                        op.channel += 1
-                        op.send_match.channel += 1
-                        print(f"+=1  to {op.channel}")
-                        pr.remove(op)
-
-# Inserts extra edges in the DAG to ensure sends aren't blocked by buffer space.
-def insert_buffer_dependencies(instr_dag):
+# Inserts extra edges in the DAG to ensure 
+# 1. Remote buffer slots aren't blocking
+# 2. Chunks sent over a channel are received in the same order
+def insert_connection_dependencies(instr_dag):
     slots = 2 if instr_dag.protocol == 'Simple' else 8
     connections = defaultdict(list) # A connection is uniquely identified by (rank, recv_peer, channel)
 
     visited = set()
-    def bfs(frontier):
-        i = 0
-        while(i < len(frontier)):
-            op = frontier[i]
+    def iterate(frontier):
+        while len(frontier) > 0:
+            _, op = heapq.heappop(frontier)
             if op not in visited:
+                rmatch = op.recv_match
                 visited.add(op)
+
                 if op.is_send():
                     rank = op.rank
                     recv_peer = op.recv_peer()
                     channel = op.channel
                     instrs = connections[(rank, recv_peer, channel)]
-                    heapq.heappush(instrs, (priority(op), op))
-                frontier += op.next
-            i += 1
+                    instrs.append(op)
+                
+                # Add a matching receive if one exists and its dependencies are satisfied
+                if rmatch is not None and all([x in visited for x in rmatch.prev]): 
+                    heapq.heappush(frontier, (priority(rmatch), rmatch))
+                # Add other operation that have dependencies satisfied
+                for o in op.next:
+                    if all([x in visited for x in o.prev]):
+                        heapq.heappush(frontier, (priority(o), o))
     
     frontier = []
     for op in instr_dag.operations.values():
         if op.inst == Instruction.start:
-            frontier.append(op)
-    bfs(frontier)
-    for c, instrs in connections.items():
+            heapq.heappush(frontier, (priority(op), op))     
+    iterate(frontier)
+
+    for instrs in connections.values():
+        # Remote buffer constraint
         for i in range(slots, len(instrs)):
-            _, inst = instrs[i]
-            _, prev_inst = instrs[i-slots]
+            inst = instrs[i]
+            prev_inst = instrs[i-slots]
             inst.prev.add(prev_inst.recv_match)
             prev_inst.recv_match.next.append(inst)
+
+        # In-order constraint
+        for i in range(1, len(instrs)):
+            inst = instrs[i]
+            prev_inst = instrs[i-1]
+            inst.recv_match.prev.add(prev_inst.recv_match)
+            prev_inst.recv_match.next.append(inst.recv_match)
+
 
