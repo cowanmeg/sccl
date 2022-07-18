@@ -28,9 +28,10 @@ def same_buf_dst(op1, op2):
     return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
 class InstructionDAG:
-    def __init__(self, num_ranks, buffers):
+    def __init__(self, num_ranks, buffers, protocol):
         self.num_ranks = num_ranks
         self.buffers = buffers
+        self.protocol = protocol
         # State for the instruction DAG
         self.operations = {} # slot -> operations
         self.last_writer = {} # slot -> last writing op

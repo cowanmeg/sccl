@@ -5,6 +5,8 @@ from dataclasses import dataclass
 from enum import Enum
 import heapq
 
+from numpy import insert
+
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
 
@@ -95,11 +97,13 @@ def auto_assign_tbs(instr_dag):
         op.tb = tbid
         current_tb_step[rank][tbid] = op.chunk_step
 
+def priority(op):
+    return ((op.chunk_step, -op.priority, op.dst.index))
+
 # Topologically orders instructions so that (1): Sends occur before their receives
 # (2): Dependent instructions occur before 
 def topo_sort_instrs(instr_dag):
-    def priority(op):
-        return ((op.chunk_step, -op.priority, op.dst.index))
+    insert_buffer_dependencies(instr_dag)
 
     visited = set()
     ops = []
@@ -108,7 +112,7 @@ def topo_sort_instrs(instr_dag):
         if op.inst == Instruction.start:
             visited.add(op)
             for o in op.next:
-                if o.inst == Instruction.send or o.inst == Instruction.copy:
+                if (o.inst == Instruction.send or o.inst == Instruction.copy) and all([x in visited for x in o.prev]):
                     heapq.heappush(ops, (priority(o), o))
 
     while len(ops) > 0:
@@ -203,9 +207,11 @@ def channel_assignment(instrs, instr_dag):
                 reserve_channel(sender, receiver, ch)
 
     # Assign channels to flows
-    for op in instrs:
-        if op.inst == Instruction.send and op.recv_match.is_fused():
-            dfs(op, all_channels(), [])
+    for slot, op in instr_dag.operations.items():
+        if op.inst == Instruction.start:
+            for o in op.next:
+                if o.inst == Instruction.send and o.recv_match.is_fused():
+                    dfs(op, all_channels(), [])
 
     # Iterate through and make certain the sends and receives between a pair of GPUs is consistent
     # Shift a (s,r) pair to another channel if the ordering isn't consistent
@@ -233,4 +239,36 @@ def channel_assignment(instrs, instr_dag):
                         print(f"+=1  to {op.channel}")
                         pr.remove(op)
 
+# Inserts extra edges in the DAG to ensure sends aren't blocked by buffer space.
+def insert_buffer_dependencies(instr_dag):
+    slots = 2 if instr_dag.protocol == 'Simple' else 8
+    connections = defaultdict(list) # A connection is uniquely identified by (rank, recv_peer, channel)
+
+    visited = set()
+    def bfs(frontier):
+        i = 0
+        while(i < len(frontier)):
+            op = frontier[i]
+            if op not in visited:
+                visited.add(op)
+                if op.is_send():
+                    rank = op.rank
+                    recv_peer = op.recv_peer()
+                    channel = op.channel
+                    instrs = connections[(rank, recv_peer, channel)]
+                    heapq.heappush(instrs, (priority(op), op))
+                frontier += op.next
+            i += 1
+    
+    frontier = []
+    for op in instr_dag.operations.values():
+        if op.inst == Instruction.start:
+            frontier.append(op)
+    bfs(frontier)
+    for c, instrs in connections.items():
+        for i in range(slots, len(instrs)):
+            _, inst = instrs[i]
+            _, prev_inst = instrs[i-slots]
+            inst.prev.add(prev_inst.recv_match)
+            prev_inst.recv_match.next.append(inst)
 

@@ -42,7 +42,7 @@ class SCCLProgram:
         # Initialize the input buffers
         # self.chunk_dag = ChunkDAG()
         self.buffers = collective.init_buffers()
-        self.instr_dag = InstructionDAG(self.num_ranks, self.buffers)
+        self.instr_dag = InstructionDAG(self.num_ranks, self.buffers, self.protocol)
         for r in range(self.num_ranks):
             for index, chunk in enumerate(self.buffers[r][Buffer.input]):
                 buffer, index = self.collective.get_buffer_index(r, Buffer.input, index)
@@ -158,7 +158,7 @@ class SCCLProgram:
             # For very large programs, turn off check_xml when shipping 
             check_dependency_cycles(self.instr_dag.instanced_tbs)
             check_threadblock_ordering(self.instr_dag)
-            # check_deadlock(self.instr_dag, self.protocol)
+            check_deadlock(self.instr_dag, self.protocol)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, self.get_maxcount(), gpu_prgms)  
 
     def generate_xml(self):

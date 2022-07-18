@@ -5,6 +5,17 @@ from collections import deque
 import sys
 from sccl.language.ir import *
 
+buf_size = 4194304 # 4MB
+def num_sends(count, chunk_size, slots):
+    # A single chunk is tiled to fit into the buffer. 
+    chunk_size = max(buf_size, chunk_size) 
+    multi_count_split = buf_size // chunk_size * count
+    trigger_point = slots * multi_count_split
+    print(f"Send of {count} will trigger a deadlock at {trigger_point}B given {slots} slots")
+
+# Simulate the program to catch deadlocks caused by fixed remote buffer sizes.
+# Assume a sends of count=1 are guaranteed to fit into the remote buffer due to tiling
+# At some size ?? a multi-count send will serially broken up into sends
 class SimulatedThreadblock:
     def __init__(self, rank, tbid, tb, protocol):
         self.rank = rank
@@ -26,13 +37,11 @@ class SimulatedThreadblock:
         return self.tb[self.step]
 
     # Simulates part of an instruction
-    # Assume the runtime can support up to 
     # Returns whether or not progress was made, whether or not instruction finished
     def simulate(self, recv_tb):
         op = self.tb[self.step]
         if op.is_recv() and op.is_send(): # RRCS, RRS, RCS
             writeable_slots = recv_tb.remote_buffer.open_slots()
-            # readable_slots = self.remote_buffer.used_slots()
             chunks_read = self.remote_buffer.read(min(self.chunks_remaining, writeable_slots))
             chunks_processed = recv_tb.remote_buffer.write(chunks_read)
         else:
@@ -53,13 +62,8 @@ class RemoteBuffer:
     def __init__(self, protocol, remotebuffer_mb=4):
         if protocol == 'Simple':
             self.slots = 2
-            self.slotsize = 4
-        elif protocol == 'LL128':
+        else: # LL and LL128
             self.slots = 8
-            self.slotsize = 2
-        elif protocol == 'LL':
-            self.slots = 8
-            self.slotsize = 1
         self.chunks = deque(maxlen=self.slots)
 
     def used_slots(self):
@@ -120,7 +124,7 @@ def check_deadlock(instr_dag, protocol):
     # Program finishes when all threadblocks execute their instructions
     def finished(tbs):
         for rank, rank_tbs in enumerate(tbs):
-            for tb in rank_tbs:
+            for tb in rank_tbs.values():
                 if not tb.finished():
                     return False
         return True
@@ -128,7 +132,7 @@ def check_deadlock(instr_dag, protocol):
     # Create remote buffers for all threadblocks (for easy indexing assume everyone has a recv peer)
     tbs = []
     for rank, rtbs in enumerate(instr_dag.tbs):
-        rank_tbs = [None] * len(rtbs)
+        rank_tbs = {}
         for tbid, tb in rtbs.items():
             rank_tbs[tbid] = (SimulatedThreadblock(rank, tbid, tb.ops, protocol))
         tbs.append(rank_tbs)
@@ -138,7 +142,7 @@ def check_deadlock(instr_dag, protocol):
     while progress and not finished(tbs):
         progress = False
         for rank, rank_tbs in enumerate(tbs):
-            for tbid, tb in enumerate(rank_tbs):
+            for tbid, tb in rank_tbs.items():
                 tb_blocked = False
                 while not tb.finished() and not tb_blocked:
                     op = tb.next_inst()
@@ -157,7 +161,11 @@ def check_deadlock(instr_dag, protocol):
                         tb_blocked = True
 
     if not finished(tbs):
-        print("ERROR!!!! Deadlock from blocking sends")
+        print("ERROR DEADLOCK!")
+        for rank, rank_tbs in enumerate(tbs):
+            for tb in rank_tbs.values():
+                if not tb.finished():
+                    print(f"Rank {rank} Threadblock step: {tb.step} {tb.chunks_remaining}")
 
 
 # Creates a dependency between a send and recv.
