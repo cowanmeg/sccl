@@ -23,9 +23,6 @@ def same_tb(op1, op2):
 
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
-    
-def same_buf_dst(op1, op2):
-    return op1.dst.buffer == op2.dst.buffer and op1.dst.index == op2.dst.index
 
 class InstructionDAG:
     def __init__(self, num_ranks, buffers, protocol):
@@ -207,13 +204,19 @@ class InstructionDAG:
     # Rules:
     # recv-copy-send 
     # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
+    # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
+    # Try and replace operations with pipelined ops like receive copy send (rcs)
+    # or receive reduce send (rrs) and receive reduce copy send (rrcs)
+    # Rules:
+    # recv-copy-send 
+    # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
     def _optimize_rcs(self):
         for slot, ops in self.operations.items():
             frontier = [ops]
             while len(frontier) > 0:
                 op = frontier[0]
                 for next_op in op.next:
-                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
+                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
                         # recv -> rcs, remove send
                         op.inst = Instruction.recv_copy_send
                         op.fused_dst = next_op.dst # This is not necessary for the IR but used for correctness.
@@ -235,13 +238,14 @@ class InstructionDAG:
                 for next_op in op.next:
                     if len(next_op.next) == 1:
                         nnext_op = next_op.next[0]
-                        if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
+                        if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
                             op.inst = Instruction.recv_reduce_send
                             op.fused_dst = next_op.dst 
                             next_op.recv_match.send_match = op
                             op.recv_match = next_op.recv_match
                             remove_op(next_op)
-                    elif op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and same_buf_dst(op, next_op):
+                    
+                    if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
                         op.inst = Instruction.recv_reduce_copy_send
                         op.fused_dst = next_op.dst 
                         next_op.recv_match.send_match = op
