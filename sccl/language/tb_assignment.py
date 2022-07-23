@@ -55,8 +55,8 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
     return options
 
 def auto_assign_tbs(instr_dag):
+    channel_assignment(instr_dag)
     instrs = topo_sort_instrs(instr_dag)
-    channel_assignment(instrs, instr_dag)
     rank_tbids = [0] * instr_dag.num_ranks
     current_tb_step = []
     for rank_tbs in instr_dag.tbs:
@@ -98,8 +98,9 @@ def auto_assign_tbs(instr_dag):
 def priority(op):
     return ((op.chunk_step, -op.priority, op.dst.index))
 
-# Topologically orders instructions so that (1): Sends occur before their receives
-# (2): Dependent instructions occur before 
+# Topologically orders instructions so that 
+# (1): Sends occur before their receives
+# (2): Instruction dependencies are respected
 def topo_sort_instrs(instr_dag):
     insert_connection_dependencies(instr_dag)
 
@@ -131,18 +132,15 @@ def topo_sort_instrs(instr_dag):
     instr_dag.ordered_instrs = ordered
     return ordered
 
-def channel_assignment(instrs, instr_dag):
+# TODO: Merge flow channel assignment with fusion
+def channel_assignment(instr_dag):
+    flows = []
+    flow_channels = []
+
     def all_channels():
-        return set([x for x in range(32)])    # First handle flows - if an instruction at Rx is fused Rw->Rx->Ry and takes c
-    # Then flow Rw->Rx->Rz must be ib a different channel c' where c!=c'
+        return set([x for x in range(32)])
     rank2sendch = [defaultdict(all_channels) for _ in range(instr_dag.num_ranks)]
     rank2recvch = [defaultdict(all_channels) for _ in range(instr_dag.num_ranks)]
-
-    # DFS through the InstructionDAG identifying flows
-    def valid_send_ch(sender, receiver, ch):
-        return ch in rank2sendch[sender][receiver]
-    def valid_recv_ch(sender, receiver, ch):
-        return ch in rank2recvch[receiver][sender]
 
     # Returns a channel this flow can be scheduled on, else -1 
     def is_matching_flow(flow):
@@ -162,54 +160,36 @@ def channel_assignment(instrs, instr_dag):
             rank2sendch[sender][receiver].remove(ch)
         if ch in rank2recvch[receiver][sender]:
             rank2recvch[receiver][sender].remove(ch)
-    flows = []
-    flow_channels = []
 
-    def create_flow(f):
-        flow = set()
-        for i in range(1, len(f)):
-            flow.add((f[i-1], f[i]))
-        return flow
-        
-    def dfs(op, channels, f):
-        if op.is_local():
-            op.channel = 0
-        elif op.is_send():
-            match = op.recv_match
-            sender = op.rank
-            receiver = match.rank
-            # Available channels
-            channels = rank2sendch[sender][receiver].intersection(rank2recvch[receiver][sender]).intersection(channels)
-            f.append(op.rank)
-            # If not a fused op use the first possible channel (send, recv/rrc)
-            if not match.is_fused():
-                f.append(match.rank)
-                flow = create_flow(f)
-                # If the user has already manually scheduled this onto a channel, respect it
-                if op.channel != -1:
-                    ch = op.channel
-                else:
-                    ch = is_matching_flow(flow)
-                    if ch == -1: # No flow matched - use the smallest available channel
-                        ch = min(channels)
-                        flows.append(flow)
-                        flow_channels.append(ch)
+    def assign_flow_channel(chain):
+        flow = chain.connection_set()
+        ch = chain.ops[0].channel
+        ch = is_matching_flow(flow) if ch == -1 else ch
+        if ch == -1: # No flow matched - use the smallest available channel
+            possible_channels = all_channels()
+            for i in range(0, len(chain.ops)-1):
+                op = chain.ops[i]
+                sender = op.rank
+                receiver = op.send_peer()
+                possible_channels = rank2sendch[sender][receiver].intersection(rank2recvch[receiver][sender]).intersection(possible_channels)
+            ch = min(possible_channels)
+            flows.append(flow)
+            flow_channels.append(ch)
 
-                op.channel = ch
-                match.channel = ch
-                reserve_channel(sender, receiver, ch)
-            else:
-                dfs(match, channels, f)
-                ch = match.channel
-                op.channel = ch
-                reserve_channel(sender, receiver, ch)
+        for op in chain.ops:
+            if op.is_send():
+                reserve_channel(op.rank, op.send_peer(), ch)
+            op.channel = ch
 
     # Assign channels to flows
-    for slot, op in instr_dag.operations.items():
-        if op.inst == Instruction.start:
-            for o in op.next:
-                if o.inst == Instruction.send and o.recv_match.is_fused():
-                    dfs(op, all_channels(), [])
+    for chain in instr_dag.chains:
+        assign_flow_channel(chain)
+
+    # Assign all remaining (send, recv) to channel 0
+    for send in instr_dag.sends:
+        if send.inst == Instruction.send and not send.recv_match.is_fused():
+            send.channel = 0 
+            send.recv_match.channel = 0
 
 # Inserts extra edges in the DAG to ensure 
 # 1. Remote buffer slots aren't blocking

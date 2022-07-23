@@ -18,11 +18,53 @@ def remove_op(op):
         n.prev.remove(op)
         n.prev =  op.prev.union(n.prev)
 
+    op.inst = Instruction.nop
+
 def same_tb(op1, op2):
     return op1.tb == op2.tb and op1.channel == op2.channel
 
 def same_count(op1, op2):
     return op1.cnt() == op2.cnt()
+
+# A chain of fused instructions
+# send -> rrs -> rrcs -> rcs -> r 
+class Chain:
+    def __init__(self, send_op):
+        assert send_op.inst == Instruction.send
+        self.ops = [send_op, send_op.recv_match]
+        self.connections = defaultdict(list)
+        self.connections[send_op.rank].append((-1, send_op.recv_match.rank))
+
+    # Try to fuse in another send
+    # Make certain we don't run into a situation where a->b->c and x->b->c
+    # since this can't map to our runtime constraints since it require two threadblocks on b send to c.
+    # Return whether it was successful or not
+    def can_add(self, send_op):
+        # send(start)---recv(mid) send(mid) ---- recv(end)
+        start = self.ops[-2].rank
+        mid = self.ops[-1].rank
+        assert mid == send_op.rank, f"Cannot fuse a ops that starts at {mid} with instruction that starts at {send_op.rank}"
+        end = send_op.recv_match.rank 
+        mid_connections = self.connections[mid]
+        for c_start, c_end in mid_connections: 
+            if c_start == start and c_end != end and c_end != -1 or c_end == end and c_start != start and c_start != -1:
+                return False
+        return True
+
+    def add(self, op):
+        self.ops[-1] = op
+        self.ops.append(op.recv_match)
+        self.connections[op.rank].append((op.send_match.rank, op.recv_match.rank))
+
+    def length(self):
+        return len(self.ops)
+
+    def connection_set(self):
+        connections = set()
+        for op in self.ops:
+            if op.is_send():
+                connections.add((op.rank, op.recv_match.rank))
+        return connections
 
 class InstructionDAG:
     def __init__(self, num_ranks, buffers, protocol):
@@ -39,7 +81,8 @@ class InstructionDAG:
             self.tbs.append({}) 
         self.tb_mapping = {}
         self.num_channels = [1] * num_ranks
-
+        self.sends = [] # list of all sends
+        self.chains = [] # list of all fused instruction chains
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
     def _write(self, rank, buffer, index, size, op, read=False):
@@ -129,6 +172,7 @@ class InstructionDAG:
         index = send_ref.index
         size = send_ref.size
         self._read(rank, buffer, index, size, op)
+        self.sends.append(op)
         return op
 
     # InstructionDAG - adds a recv node
@@ -172,9 +216,10 @@ class InstructionDAG:
                     ops = ops[1:]
                     
     def optimize(self):
-        self._optimize_rrcs_rrs()
-        self._optimize_rcs()
-
+        self._instr_fusion()
+        # self._optimize_rcs()
+        # self._optimize_rrcs_rrs()
+        
     # Completes metadata for chunk_steps (number of steps from a start op) and priority (number of steps to the last op)
     def _complete_metadata(self):
         def dfs(op, cs):
@@ -196,20 +241,48 @@ class InstructionDAG:
         for chunk, op in self.operations.items():
             if op.inst == Instruction.start:
                 dfs(op,-2) # Start instructions should start at -1
-            
+    
+    # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
+    # Try and replace operations with pipelined ops like receive copy send (rcs)
+    # or receive reduce send (rrs) and receive reduce copy send (rrcs)
+    # Rules:
+    # recv-copy-send 
+    # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
+    # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
+    # Try and replace operations with pipelined ops like receive copy send (rcs)
+    # or receive reduce send (rrs) and receive reduce copy send (rrcs)
+    # Rules:
+    # recv-copy-send 
+    # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
+    def _instr_fusion(self):
         
-    # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
-    # Try and replace operations with pipelined ops like receive copy send (rcs)
-    # or receive reduce send (rrs) and receive reduce copy send (rrcs)
-    # Rules:
-    # recv-copy-send 
-    # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
-    # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
-    # Try and replace operations with pipelined ops like receive copy send (rcs)
-    # or receive reduce send (rrs) and receive reduce copy send (rrcs)
-    # Rules:
-    # recv-copy-send 
-    # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
+        def dfs(send_op, flow):
+            op = send_op.recv_match
+            for next_op in op.next:
+                if next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and flow.can_add(next_op):
+                    if op.inst == Instruction.recv:
+                        op.inst = Instruction.recv_copy_send
+                    else: # op.inst == Instruction.recv_reduce_copy:
+                        nnext_op = next_op.next[0] if len(next_op.next) > 0 else None
+                        if nnext_op and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, nnext_op):
+                            op.inst = Instruction.recv_reduce_send   
+                        else:
+                            op.inst = Instruction.recv_reduce_copy_send
+    
+                    op.fused_dst = next_op.dst 
+                    next_op.recv_match.send_match = op
+                    op.recv_match = next_op.recv_match
+                    remove_op(next_op)
+                    flow.add(op)
+                    return dfs(op, flow)
+            return flow
+
+        for send in self.sends:
+            if send.inst == Instruction.send:
+                chain = Chain(send)
+                dfs(send, chain)
+                self.chains.append(chain)
+
     def _optimize_rcs(self):
         for slot, ops in self.operations.items():
             frontier = [ops]
@@ -264,19 +337,24 @@ class InstructionDAG:
     def infer_dependencies(self):
         for slot, ops in self.operations.items():
             frontier = [ops]
+            visited = set()
             while len(frontier) > 0:
                 op = frontier[0]
-                # Dependencies for every op is the same as the ops that are stored in prev
-                # Filter out dependencies that are satisified by tbs executing ops sequentially
-                # If multiple dependent ops from the same tb keep the one that happens last
-                depends = {}
-                for dep_op in list(op.prev):
-                    if dep_op.inst != Instruction.start:
-                        tb = dep_op.tb
-                        if tb not in depends or dep_op.step > depends[tb].step:
-                            depends[tb] = dep_op
-                op.depends = list(depends.values())
-                frontier = frontier[1:] + op.next
+                if op not in visited:
+                    visited.add(op)
+                    # Dependencies for every op is the same as the ops that are stored in prev
+                    # Filter out dependencies that are satisified by tbs executing ops sequentially
+                    # If multiple dependent ops from the same tb keep the one that happens last
+                    # Filter out dependencies between two different ranks
+                    depends = {}
+                    for dep_op in list(op.prev):
+                        if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
+                            tb = dep_op.tb
+                            if tb not in depends or dep_op.step > depends[tb].step:
+                                depends[tb] = dep_op
+                    op.depends = list(depends.values())
+                    frontier += op.next
+                frontier = frontier[1:]
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
