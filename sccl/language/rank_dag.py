@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 import heapq
 import functools
+from typing import DefaultDict
 
 from sccl.language.ir import *
 from sccl.language.passes import *
@@ -18,7 +19,7 @@ def remove_op(op):
         n.prev.remove(op)
         n.prev =  op.prev.union(n.prev)
 
-    op.inst = Instruction.nop
+    op.inst = Instruction.delete
 
 def same_tb(op1, op2):
     return op1.tb == op2.tb and op1.channel == op2.channel
@@ -217,8 +218,6 @@ class InstructionDAG:
                     
     def optimize(self):
         self._instr_fusion()
-        # self._optimize_rcs()
-        # self._optimize_rrcs_rrs()
         
     # Completes metadata for chunk_steps (number of steps from a start op) and priority (number of steps to the last op)
     def _complete_metadata(self):
@@ -254,8 +253,12 @@ class InstructionDAG:
     # Rules:
     # recv-copy-send 
     # recv(src, sbuf, si, _, _, _ ) send(_, _, _, dst, dbuf, di) -> recv_copy_send(src, sbuf, si, dst, dbuf, di)
+    # recv-reduce-send - A rrc followed by a send that gets overwritten
+    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di) 
+    # recv-reduce-copy-send - A rrc followed by a send that does not get overwritten
+    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
+
     def _instr_fusion(self):
-        
         def dfs(send_op, flow):
             op = send_op.recv_match
             for next_op in op.next:
@@ -282,49 +285,6 @@ class InstructionDAG:
                 chain = Chain(send)
                 dfs(send, chain)
                 self.chains.append(chain)
-
-    def _optimize_rcs(self):
-        for slot, ops in self.operations.items():
-            frontier = [ops]
-            while len(frontier) > 0:
-                op = frontier[0]
-                for next_op in op.next:
-                    if op.inst == Instruction.recv and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
-                        # recv -> rcs, remove send
-                        op.inst = Instruction.recv_copy_send
-                        op.fused_dst = next_op.dst # This is not necessary for the IR but used for correctness.
-                        next_op.recv_match.send_match = op
-                        op.recv_match = next_op.recv_match
-                        remove_op(next_op)
-                        break # Can only fuse one instruction
-                frontier = frontier[1:] + op.next
-    # recv-reduce-send - A rrc followed by a send that gets overwritten
-    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di) recv(_, _, _, dst, dbuf, di) 
-    # recv-reduce-copy-send - A rrc followed by a send that does not get overwritten
-    # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
-    def _optimize_rrcs_rrs(self):
-        # RRC/S -> RRS
-        for slot, ops in self.operations.items():
-            frontier = [ops]
-            while len(frontier) > 0:
-                op = frontier[0]
-                for next_op in op.next:
-                    if len(next_op.next) == 1:
-                        nnext_op = next_op.next[0]
-                        if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, next_op):
-                            op.inst = Instruction.recv_reduce_send
-                            op.fused_dst = next_op.dst 
-                            next_op.recv_match.send_match = op
-                            op.recv_match = next_op.recv_match
-                            remove_op(next_op)
-                    
-                    if op.inst == Instruction.recv_reduce_copy and next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op):
-                        op.inst = Instruction.recv_reduce_copy_send
-                        op.fused_dst = next_op.dst 
-                        next_op.recv_match.send_match = op
-                        op.recv_match = next_op.recv_match
-                        remove_op(next_op)
-                frontier = frontier[1:] + op.next
 
     def lower_pt1(self, instances):
         self.lower_buffers(instances)
@@ -488,4 +448,121 @@ class InstructionDAG:
                 self.instanced_tbs[op.rank][iop.tb].ops.append(iop)
         self.convert_set_list()
         self.infer_dependencies()
+
     
+    def priority(self, op):
+        return ((op.chunk_step, -op.priority, op.dst.index))
+        
+    # Scheduling interface?
+    def topo_sort_instrs(self):
+        visited = set()
+        ops = []
+        ordered = []
+        for slot, op in self.operations.items():
+            if op.inst == Instruction.start:
+                visited.add(op)
+                for o in op.next:
+                    if (o.inst == Instruction.send or o.inst == Instruction.copy) and all([x in visited for x in o.prev]):
+                        heapq.heappush(ops, (self.priority(o), o))
+
+        while len(ops) > 0:
+            _, op = heapq.heappop(ops)
+            if op not in visited:
+                rmatch = op.recv_match
+                ordered.append(op)
+                visited.add(op)
+                
+                # Add a matching receive if one exists and its dependencies are satisfied
+                if rmatch is not None and all([x in visited for x in rmatch.prev]): 
+                    heapq.heappush(ops, (self.priority(rmatch), rmatch))
+                # Add other operation that have dependencies satisfied
+                for o in op.next:
+                    if all([x in visited for x in o.prev]):
+                        heapq.heappush(ops, (self.priority(o), o))
+
+        return ordered
+
+
+    # Return all the unique connections made in the program
+    def get_connections(self):
+        self._complete_metadata()
+        toposorted = self.topo_sort_instrs()
+        send_connections = []
+        recv_connections = []
+        for _ in range(self.num_ranks):
+            send_connections.append(defaultdict(list))
+            recv_connections.append(defaultdict(list))
+
+        for inst in toposorted:
+            if inst.is_send():
+                send_connections[inst.rank][inst.send_peer()].append(inst)
+            elif inst.is_recv():
+                recv_connections[inst.rank][inst.recv_peer()].append(inst)
+        
+        self.send_connections = send_connections
+        self.recv_connections = recv_connections
+        return send_connections, recv_connections
+        
+
+    def split_connection(self, rank, peer, num_channels, blocked=False):
+        sends = self.send_connections[rank][peer]
+        num_sends = len(sends)
+        if num_channels > num_sends:
+            return False
+            
+           
+        elif blocked:
+            each_channel = ceil(num_sends / num_channels)
+            for i in range(num_sends, step=each_channel):
+                block = sends[i:i+each_channel]
+                for send in block:
+                    send.channel = i
+                    send.recv_match.channel = i
+        else:
+            for i, send in enumerate(sends):
+                send.channel = i % num_channels
+                send.recv_match.channel = i % num_channels
+    
+    def get_connections_on_channel(self, rank, channel):
+        scons = defaultdict(list)
+        for peer, insts in self.send_connections[rank].items():
+            for inst in insts:
+                if inst.channel == channel:
+                    scons[peer].append(inst)
+
+        rcons = defaultdict(list)
+        for peer, insts in self.recv_connections[rank].items():
+            for inst in insts:
+                if inst.channel == channel:
+                    rcons[peer].append(inst)
+
+        return scons, rcons
+
+    def merge_threadblocks(self, scon, rcon, tb):
+        for i in scon:
+            i.tb = tb
+        for i in rcon:
+            i.tb = tb
+    
+
+
+    # def merge_threadblocks(self, merges: set[chan_t]) -> dict[Op, tbid_t]:
+    #     # this only works because we've assumed all ranks are isomorphic
+    #     tb_groups: dict[str, set[Op]] = defaultdict(set)
+
+    #     for op in channel_assignment:
+    #         if (chan := channel_assignment[op]) in merges:
+    #             tb_groups[f'sr{chan}'].add(op)
+    #         elif op.is_send():
+    #             tb_groups[f's{chan}'].add(op)
+    #         elif op.is_recv():
+    #             tb_groups[f'r{chan}'].add(op)
+    #         else:
+    #             assert False, "local op somehow made it into the channel assignment??"
+
+    #     tb_assignment: dict[Op, tbid_t] = {}
+    #     for i, tb in enumerate(tb_groups.values()):
+    #         for op in tb:
+    #             tb_assignment[op] = tbid_t(i + 1) # reserve 0 for all local operations
+
+    #     return tb_assignment

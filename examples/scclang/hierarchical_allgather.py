@@ -36,6 +36,7 @@ def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra
         if not inplace:
             for g in range(num_gpus):
                 chunk(g, Buffer.input, 0).copy(g, Buffer.output, g)
+                
         for g in range(num_local_gpus):
             ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g, chunk_stride=num_local_gpus, chan=const_func(g%2)
                 , sendtb=const_func(num_nodes*intra_ch+g%2), recvtb=const_func(num_nodes*intra_ch+g%2)

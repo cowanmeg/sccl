@@ -67,6 +67,9 @@ def auto_assign_tbs(instr_dag):
         s = op.send_peer()
         r = op.recv_peer()
 
+        if op.inst == Instruction.delete:
+            print('Should not be here ')
+
         channel = 0 if op.channel == -1 else op.channel
 
         # Get all possible TBs this can be mapped to
@@ -120,6 +123,9 @@ def topo_sort_instrs(instr_dag):
             rmatch = op.recv_match
             ordered.append(op)
             visited.add(op)
+
+            if op.inst == Instruction.nop:
+                print("ERR")
             
             # Add a matching receive if one exists and its dependencies are satisfied
             if rmatch is not None and all([x in visited for x in rmatch.prev]): 
@@ -187,7 +193,7 @@ def channel_assignment(instr_dag):
 
     # Assign all remaining (send, recv) to channel 0
     for send in instr_dag.sends:
-        if send.inst == Instruction.send and not send.recv_match.is_fused():
+        if send.inst == Instruction.send and not send.recv_match.is_fused() and send.channel == -1:
             send.channel = 0 
             send.recv_match.channel = 0
 

@@ -9,7 +9,6 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, 1, inplace=False)
-    instances = 1
         
     with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, protocol=protocol):
         for n1 in range(num_nodes):

@@ -207,7 +207,7 @@ class Op:
         return id(self)
 
     def __repr__(self):
-        return f'Op({self.inst}, {self.rank}, {self.src}, {self.dst}, step:{self.step}, tb:{self.tb})'
+        return f'Op({self.inst}, {self.rank}, {self.src}, {self.dst}, ch:{self.channel}, tb:{self.tb})'
 
 
 # Instructions where src is on local GPU

@@ -20,7 +20,7 @@ def allreduce_allpairs(gpus, instances, protocol):
                 if r1 != r2:
                     index = r2 * size
                     c = chunk(r1, Buffer.input, index, size=size)
-                    c.copy(r2, 'scratch', sendtb=r2, recvtb=r1)
+                    c.copy(r2, 'scratch', sendtb=r2*2+size, recvtb=r1)
 
         # Each rank performs a local reduction on the nth chunk
         # Utilize 8 threadblocks for this reduction for better parallelism
@@ -35,7 +35,7 @@ def allreduce_allpairs(gpus, instances, protocol):
                 if r1 != r2:
                     index = r1 * size
                     c = chunk(r1, Buffer.input, index, size)
-                    c.copy(r2, Buffer.input, index, sendtb=r2, recvtb=r1)
+                    c.copy(r2, Buffer.input, index, sendtb=r2, recvtb=r1*2+size)
                 
         XML()
         Check()
