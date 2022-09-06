@@ -199,13 +199,15 @@ def check_threadblock_ordering(instr_dag):
                     if other_tbid in prev_steps:
                         if match.step <= prev_steps[other_tbid].step:
                             print("Offending Steps", match.step, prev_steps[other_tbid].step)
-                            print("Sending tb")
+                            sender = op.rank
+                            receiver = match.rank
+                            print(f"Sending tb Rank:{sender}")
                             for op in tb.ops:
                                 print(f'{op.step}: Recv step: {op.recv_match.step if op.is_send() else -1} {op} priority:{(op.chunk_step, op.priority, op.dst.index)}')
-                            print("Receiving tb")
+                            print(f"Receiving tb Rank:{receiver}")
                             for op in instr_dag.tbs[match.rank][other_tbid].ops:
                                 print(f'{op.step}: {op} priority:{(op.chunk_step, op.priority, op.dst.index)}')
-                            assert match.step >  prev_steps[other_tbid].step, f"Rank {op.rank} sends op1 then op2 but {match.rank} receives op2 then op1"
+                            # assert match.step >  prev_steps[other_tbid].step, f"Rank {sender} sends op1 then op2 but {receiver} receives op2 then op1"
                         
                     prev_steps[other_tbid] = match
 

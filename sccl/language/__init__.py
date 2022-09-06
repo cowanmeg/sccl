@@ -10,9 +10,11 @@ from sccl.language.tb_assignment import *
 from sccl.language.chunk import *
 from sccl.language.buffer import *
 from sccl.language.rank_dag import *
+from sccl.language.schedule import *
 import sccl.collectives as collectives
 # from sccl.language.visualize import *
 
+_parallel_id = 0
 _current_program = None
 def _curr():
     global _current_program
@@ -123,6 +125,21 @@ class SCCLProgram:
         if name not in self.buffers[rank]:
             self.buffers[rank][name] = BufferSlice(Buffer.scratch, name)
 
+    def apply_parallelize(self):
+        # Parallelize fragments of code by replicating instructions
+        # TODO: Handle when counts are not evenly divided by instances
+        # TODO: Nesting parallelizes
+        # TODO: Channels
+
+        scheduled_trace = []
+        replicate = 1
+        for op in self.trace:
+            if op is ScheduleOp and op.type is ScheduleType.parallel_enter:
+                replicate *= op.factor
+            if op is ScheduleOp and op.type is ScheduleType.parallel_exit:
+                replicate /= op.factor
+            # print(op, replicate)
+
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
     def check(self):
@@ -131,7 +148,8 @@ class SCCLProgram:
     def get_maxcount(self):
         maxcount = 1
         for op in self.trace:
-            maxcount = max(maxcount, op.src.size)
+            if type(op) is ChunkOp:
+                maxcount = max(maxcount, op.src.size)
         return maxcount
 
     # Lower program to XML
@@ -139,6 +157,7 @@ class SCCLProgram:
         # self.chunk_dag._complete_metadata()
         # self.chunk_dag.channel_assignment()
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
+        self.apply_parallelize()
         self.instr_dag.convert_set_list() # Pre-emptively convert sets to lists
         self.instr_dag._complete_metadata()
         if self.instr_fusion:
@@ -192,6 +211,21 @@ def Check():
 
 def InstrDAG():
     return _curr().instr_dag
+
+class parallelize():
+    def __init__(self, instances):
+        global _parallel_id
+        self.instances = instances
+        self.id = _parallel_id
+        _parallel_id += 1
+
+    def __enter__(self):
+        print("Entering parallelize", self.instances, self.id)
+        _curr().trace.append(ScheduleOp(ScheduleType.parallel_enter, self.instances))
+
+    def __exit__(self, exc_type, exc_value, exc_traceback):
+        print("Existing parallelize", self.instances, self.id)
+        _curr().trace.append(ScheduleOp(ScheduleType.parallel_exit, self.instances))
 
 @dataclass
 class Ref(ChunkRef):

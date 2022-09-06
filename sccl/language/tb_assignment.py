@@ -202,7 +202,7 @@ def channel_assignment(instr_dag):
 # 2. Chunks sent over a channel are received in the same order
 def insert_connection_dependencies(instr_dag):
     slots = 2 if instr_dag.protocol == 'Simple' else 8
-    connections = defaultdict(list) # A connection is uniquely identified by (rank, recv_peer, channel)
+    connections = defaultdict(list) # A connection is uniquely identified by (send_peer, recv_peer, channel)
 
     visited = set()
     def iterate(frontier):
@@ -214,7 +214,7 @@ def insert_connection_dependencies(instr_dag):
 
                 if op.is_send():
                     rank = op.rank
-                    recv_peer = op.recv_peer()
+                    recv_peer = op.recv_match.rank
                     channel = op.channel
                     instrs = connections[(rank, recv_peer, channel)]
                     instrs.append(op)

@@ -463,7 +463,6 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     chunks = algorithm.collective.num_chunks
     co_name = algorithm.collective.runtime_name
     num_ranks = algorithm.topology.num_nodes()
-    print(chunks, num_ranks)
     # TODO: Make the collectives for synthesizer and language the same
     if co_name == 'allreduce':
         collective = lang_collectives.AllReduce(num_ranks, chunks, inplace)
@@ -472,19 +471,21 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     elif co_name == 'alltoall':
         collective = lang_collectives.AllToAll(num_ranks, chunks // num_ranks, inplace)
     elif co_name == 'reduce_scatter':
-        collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
+        collective = lang_collectives.ReduceScatter(num_ranks, chunks // num_ranks // num_ranks, inplace)
     # TODO: SCCLang instances are they equivalent?
-    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=False)
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=instr_fusion)
     with program:
         for rank, gpu in gpus.items():
             for copy_op in gpu.precopies:
                 chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).copy(rank, copy_op.dst_buf, copy_op.dst_off)
 
-        for step_idx, sends in enumerate(sends_by_step):
-            # print(step_idx)
-            for src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan in sends:
-                # print("  ", src, chan, src_buf, src_off, dst, dst_buf, dst_off, cnt)
-                chunk(src, src_buf, src_off, cnt).copy(dst, dst_buf, dst_off, ch=chan)
+        for sends in sends_by_step:
+            for send in sends:
+                src, dst, src_buf, src_off, dst_buf, dst_off, cnt, chan = send
+                if co_name == 'reduce_scatter':
+                    chunk(dst, dst_buf, dst_off, cnt).reduce(chunk(src, src_buf, src_off, cnt), ch=chan)
+                else:
+                    chunk(src, src_buf, src_off, cnt).copy(dst, dst_buf, dst_off, ch=chan)
 
         for rank, gpu in gpus.items():
             for copy_op in gpu.postcopies:
@@ -496,5 +497,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                 if addr in gpu.outputs:
                     chunk(rank, Buffer.input, gpu.inputs[addr]).copy(rank, Buffer.output, gpu.outputs[addr])
                     del gpu.outputs[addr]
+        
+        Check()
                     
     return ir_to_xml(program.lower())
