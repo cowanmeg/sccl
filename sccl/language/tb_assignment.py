@@ -46,12 +46,16 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
         tb_c = tb.channel
         sender_ok = send == -1 or tb_s == send
         receiver_ok = recv == -1 or tb_r == recv
-        channel_ok = channel == -1 or channel == tb_c
+        channel_ok = channel == tb_c
+
         # For correctness - if one of the peer's channels is already allocated we must use it.
         if channel_ok and ((tb_s == send and send != -1) or (tb_r == recv and recv != -1)):
             return [tbid]
-        if sender_ok and receiver_ok and channel_ok:
-             options.append(tbid)
+        # TODO: Uncomment out if copies should be dispersed.
+        # if sender_ok and receiver_ok and channel_ok and (send != -1 or recv != -1):
+        #      options.append(tbid)
+        # if send == -1 and recv == -1:
+        #     print(options)
     return options
 
 def auto_assign_tbs(instr_dag):
@@ -67,13 +71,11 @@ def auto_assign_tbs(instr_dag):
         s = op.send_peer()
         r = op.recv_peer()
 
-        if op.inst == Instruction.delete:
-            print('Should not be here ')
-
         channel = 0 if op.channel == -1 else op.channel
 
         # Get all possible TBs this can be mapped to
         tb_options = _get_tb_options(instr_dag.tbs[rank], s, r, channel, rank_tbids[rank])
+        
         if len(tb_options) == 0: # If there are no options, create a new threadblock
             tbid = rank_tbids[rank]
             instr_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
@@ -110,7 +112,7 @@ def topo_sort_instrs(instr_dag):
     visited = set()
     ops = []
     ordered = []
-    for slot, op in instr_dag.operations.items():
+    for op in instr_dag.operations.values():
         if op.inst == Instruction.start:
             visited.add(op)
             for o in op.next:
@@ -123,9 +125,6 @@ def topo_sort_instrs(instr_dag):
             rmatch = op.recv_match
             ordered.append(op)
             visited.add(op)
-
-            if op.inst == Instruction.nop:
-                print("ERR")
             
             # Add a matching receive if one exists and its dependencies are satisfied
             if rmatch is not None and all([x in visited for x in rmatch.prev]): 
@@ -133,9 +132,12 @@ def topo_sort_instrs(instr_dag):
             # Add other operation that have dependencies satisfied
             for o in op.next:
                 if all([x in visited for x in o.prev]):
-                    heapq.heappush(ops, (priority(o), o))
+                    if not o.is_recv() or o.send_match in visited:
+                        heapq.heappush(ops, (priority(o), o))
 
     instr_dag.ordered_instrs = ordered
+    # print("Number of instrs", instr_dag.num_instrs)
+    # print("Number of ordered instrs", len(visited))
     return ordered
 
 # TODO: Merge flow channel assignment with fusion
@@ -155,6 +157,7 @@ def channel_assignment(instr_dag):
             ch = flow_channels[flows.index(flow)]
             return flow_channels[flows.index(flow)]
         # Check if this flow is a subset of an existing flow
+        # TODO: Why is this causing issues?
         # for existing_flow in flows:
         #     if flow.issubset(existing_flow):
         #         return flow_channels[flows.index(existing_flow)]
@@ -169,8 +172,8 @@ def channel_assignment(instr_dag):
 
     def assign_flow_channel(chain):
         flow = chain.connection_set()
-        ch = chain.ops[0].channel
-        ch = is_matching_flow(flow) if ch == -1 else ch
+        user_ch = chain.ops[0].channel
+        ch = is_matching_flow(flow)
         if ch == -1: # No flow matched - use the smallest available channel
             possible_channels = all_channels()
             for i in range(0, len(chain.ops)-1):
@@ -178,7 +181,12 @@ def channel_assignment(instr_dag):
                 sender = op.rank
                 receiver = op.send_peer()
                 possible_channels = rank2sendch[sender][receiver].intersection(rank2recvch[receiver][sender]).intersection(possible_channels)
-            ch = min(possible_channels)
+            # If the program specified a channel try to respect it
+            # Might not be possible due to valid tb-channel constraints
+            if user_ch != -1 and user_ch in possible_channels:
+                ch = user_ch
+            else:
+                ch = min(possible_channels)
             flows.append(flow)
             flow_channels.append(ch)
 
@@ -186,6 +194,7 @@ def channel_assignment(instr_dag):
             if op.is_send():
                 reserve_channel(op.rank, op.send_peer(), ch)
             op.channel = ch
+            
 
     # Assign channels to flows
     for chain in instr_dag.chains:
@@ -225,27 +234,56 @@ def insert_connection_dependencies(instr_dag):
                 # Add other operation that have dependencies satisfied
                 for o in op.next:
                     if all([x in visited for x in o.prev]):
-                        heapq.heappush(frontier, (priority(o), o))
-    
+                        if not o.is_recv() or o.send_match in visited:
+                            heapq.heappush(frontier, (priority(o), o))
     frontier = []
     for op in instr_dag.operations.values():
         if op.inst == Instruction.start:
             heapq.heappush(frontier, (priority(op), op))     
     iterate(frontier)
+    # print("Number of ops visited during deps", len(visited))
+
 
     for instrs in connections.values():
-        # Remote buffer constraint
+        # Remote buffer constraint. Across a connection only slot number of sends are allowed to be buffered
+        # before the receiver reads
         for i in range(slots, len(instrs)):
             inst = instrs[i]
             prev_inst = instrs[i-slots]
             inst.prev.add(prev_inst.recv_match)
             prev_inst.recv_match.next.append(inst)
 
-        # In-order constraint
-        for i in range(1, len(instrs)):
-            inst = instrs[i]
-            prev_inst = instrs[i-1]
-            inst.recv_match.prev.add(prev_inst.recv_match)
-            prev_inst.recv_match.next.append(inst.recv_match)
+        # In-order constraint. Across a connection: send a, send b --> recv a, recv b
+        for i in range(0, len(instrs)-1):
+            send0 = instrs[i]
+            send1 = instrs[i+1]
+            recv0 = send0.recv_match
+            recv1 = send1.recv_match
 
+            recv0.next.append(recv1)
+            recv1.prev.add(recv0)
+    # _detect_cycle(instr_dag)
+    
 
+def _detect_cycle(instr_dag):
+    def deep_copy(s):
+        c = list()
+        for i in s:
+            c.append(i)
+        return c
+
+    def dfs(op, ops):
+        if op in ops:
+            print("CYCLE", op)
+            for o in ops:
+                print(o)
+            sys.exit()
+        else:
+            ops.append(op)
+
+        for o in op.next:
+            dfs(o, deep_copy(ops))
+
+    for chunk, op in instr_dag.operations.items():
+        if op.inst == Instruction.start:
+            dfs(op, list())

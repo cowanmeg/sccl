@@ -329,6 +329,13 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         for gpu in gpus.values():
             gpu.scratch = { addr: idx for idx, addr in enumerate(sorted(gpu.scratch)) }
 
+    # Add any copies from input to output that weren't already added
+    for rank, gpu in gpus.items():
+        for addr in gpu.inputs:
+            if addr in gpu.outputs:
+                gpu.postcopies.append(CopyOp(Buffer.input, gpu.inputs[addr], Buffer.output, gpu.outputs[addr], 1))
+                del gpu.outputs[addr]
+    
     # Sort and combine contiguous copy operations
     for rank, gpu in gpus.items():
         def combine_copies(copies):
@@ -350,10 +357,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
     # Expand copies by instances if necessary
     # if instances > 1:
-    #     print("here")
     #     for rank, gpu in gpus.items():
     #         for copy in itertools.chain(gpu.precopies, gpu.postcopies):
-    #             print("hello")
     #             copy.src_off *= instances
     #             copy.dst_off *= instances
     #             copy.cnt *= instances
@@ -460,24 +465,27 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
     # Lower into a SCCLang program
     inplace = False
-    chunks = algorithm.collective.num_chunks
+    chunks = algorithm.instance.chunks
     co_name = algorithm.collective.runtime_name
     num_ranks = algorithm.topology.num_nodes()
     # TODO: Make the collectives for synthesizer and language the same
     if co_name == 'allreduce':
         collective = lang_collectives.AllReduce(num_ranks, chunks, inplace)
     elif co_name == 'allgather':
-        collective = lang_collectives.AllGather(num_ranks, chunks // num_ranks, inplace)
+        collective = lang_collectives.AllGather(num_ranks, chunks, inplace)
     elif co_name == 'alltoall':
-        collective = lang_collectives.AllToAll(num_ranks, chunks // num_ranks, inplace)
+        collective = lang_collectives.AllToAll(num_ranks, chunks, inplace)
     elif co_name == 'reduce_scatter':
-        collective = lang_collectives.ReduceScatter(num_ranks, chunks // num_ranks // num_ranks, inplace)
+        collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
     # TODO: SCCLang instances are they equivalent?
+    # Note: turning off instruction fusion is beneficial for some of these algos because 
+    # maximal fusion requires more channels+threadblocks which interferes with the rounds.
     program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=instr_fusion)
     with program:
         for rank, gpu in gpus.items():
             for copy_op in gpu.precopies:
-                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).copy(rank, copy_op.dst_buf, copy_op.dst_off)
+                c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
+                c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
 
         for sends in sends_by_step:
             for send in sends:
@@ -489,14 +497,8 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
         for rank, gpu in gpus.items():
             for copy_op in gpu.postcopies:
-                chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt).copy(rank, copy_op.dst_buf, copy_op.dst_off)
-
-        # Add any copies from input to output that weren't already added
-        for rank, gpu in gpus.items():
-            for addr in gpu.inputs:
-                if addr in gpu.outputs:
-                    chunk(rank, Buffer.input, gpu.inputs[addr]).copy(rank, Buffer.output, gpu.outputs[addr])
-                    del gpu.outputs[addr]
+                c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
+                c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
         
         Check()
                     

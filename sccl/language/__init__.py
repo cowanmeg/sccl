@@ -159,14 +159,13 @@ class SCCLProgram:
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
         self.apply_parallelize()
         self.instr_dag.convert_set_list() # Pre-emptively convert sets to lists
-        self.instr_dag._complete_metadata()
         if self.instr_fusion:
             self.instr_dag.optimize()
+        self.instr_dag._complete_metadata()
         if self.DAG_preprocess_func != None:
             self.DAG_preprocess_func(self.instr_dag)
             manual_assign_tbs(self.instr_dag)
         elif self.threadblock_policy == ThreadblockPolicy.manual:
-            self.instr_dag._complete_metadata()
             manual_assign_tbs(self.instr_dag)
         else:
             auto_assign_tbs(self.instr_dag)

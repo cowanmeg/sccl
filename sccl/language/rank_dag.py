@@ -84,6 +84,7 @@ class InstructionDAG:
         self.num_channels = [1] * num_ranks
         self.sends = [] # list of all sends
         self.chains = [] # list of all fused instruction chains
+        self.num_instrs = 0
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
     def _write(self, rank, buffer, index, size, op, read=False):
@@ -132,6 +133,7 @@ class InstructionDAG:
 
     # InstructionDAG - builds the roots of the DAG
     def add_start(self, ref):
+        self.num_instrs += 1
         slot = (ref.rank, ref.buffer, ref.index)
         op = Op(Instruction.start, ref.rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
         self.operations[slot] = op
@@ -139,6 +141,7 @@ class InstructionDAG:
 
     # InstructionDAG - adds a copy node
     def add_copy(self, rank, send_ref, recv_ref, tb, ch):
+        self.num_instrs += 1
         op = Op(Instruction.copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
@@ -153,6 +156,7 @@ class InstructionDAG:
 
     # InstructionDAG - adds a redduce node
     def add_reduce(self, rank, send_ref, recv_ref, tb, ch):
+        self.num_instrs += 1
         op = Op(Instruction.reduce, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         dstbuffer = recv_ref.buffer
         dstindex = recv_ref.index
@@ -168,6 +172,7 @@ class InstructionDAG:
 
     # InstructionDAG - adds a send node
     def add_send(self, rank, send_ref, recv_ref, tb, ch):
+        self.num_instrs += 1
         op = Op(Instruction.send, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = send_ref.buffer
         index = send_ref.index
@@ -178,6 +183,7 @@ class InstructionDAG:
 
     # InstructionDAG - adds a recv node
     def add_recv(self, rank, send_ref, recv_ref, tb, ch, send_op):
+        self.num_instrs += 1
         op = Op(Instruction.recv, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
@@ -188,6 +194,7 @@ class InstructionDAG:
 
     # InstructionDAG - adds a rrc node
     def add_recv_reduce_copy(self, rank, send_ref, recv_ref, tb, ch, send_op):
+        self.num_instrs += 1
         op = Op(Instruction.recv_reduce_copy, rank, send_ref, recv_ref, next=set(), prev=set(), tb=tb, channel=ch)
         buffer = recv_ref.buffer
         index = recv_ref.index
@@ -277,6 +284,7 @@ class InstructionDAG:
                     op.recv_match = next_op.recv_match
                     remove_op(next_op)
                     flow.add(op)
+                    self.num_instrs -= 1
                     return dfs(op, flow)
             return flow
 
