@@ -4,6 +4,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import heapq
+import time
 
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
@@ -52,10 +53,8 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
         if channel_ok and ((tb_s == send and send != -1) or (tb_r == recv and recv != -1)):
             return [tbid]
         # TODO: Uncomment out if copies should be dispersed.
-        # if sender_ok and receiver_ok and channel_ok and (send != -1 or recv != -1):
-        #      options.append(tbid)
-        # if send == -1 and recv == -1:
-        #     print(options)
+        if sender_ok and receiver_ok and channel_ok:
+             options.append(tbid)
     return options
 
 def auto_assign_tbs(instr_dag):
@@ -108,7 +107,7 @@ def priority(op):
 # (2): Instruction dependencies are respected
 def topo_sort_instrs(instr_dag):
     insert_connection_dependencies(instr_dag)
-
+    start = time.time()
     visited = set()
     ops = []
     ordered = []
@@ -138,10 +137,13 @@ def topo_sort_instrs(instr_dag):
     instr_dag.ordered_instrs = ordered
     # print("Number of instrs", instr_dag.num_instrs)
     # print("Number of ordered instrs", len(visited))
+    end = time.time()
+    print(f"Topological sort {end-start}s")
     return ordered
 
 # TODO: Merge flow channel assignment with fusion
 def channel_assignment(instr_dag):
+    start = time.time()
     flows = []
     flow_channels = []
 
@@ -205,11 +207,15 @@ def channel_assignment(instr_dag):
         if send.inst == Instruction.send and not send.recv_match.is_fused() and send.channel == -1:
             send.channel = 0 
             send.recv_match.channel = 0
+    
+    end = time.time()
+    print(f"Channel assignment {end-start}s")
 
 # Inserts extra edges in the DAG to ensure 
 # 1. Remote buffer slots aren't blocking
 # 2. Chunks sent over a channel are received in the same order
 def insert_connection_dependencies(instr_dag):
+    start = time.time()
     slots = 2 if instr_dag.protocol == 'Simple' else 8
     connections = defaultdict(list) # A connection is uniquely identified by (send_peer, recv_peer, channel)
 
@@ -262,6 +268,8 @@ def insert_connection_dependencies(instr_dag):
 
             recv0.next.append(recv1)
             recv1.prev.add(recv0)
+    end = time.time()
+    print(f"Adding extra deps {end-start}s")
     # _detect_cycle(instr_dag)
     
 

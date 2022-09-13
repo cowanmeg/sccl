@@ -72,7 +72,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
 
         for n1 in range(num_nodes):
             for g1 in range(gpus_per_node):
-                for ch in range(instances):
+                for ch in range(instances): # Local instances?
                     for n2 in range(num_nodes):
                         r1 = RankFromNodeGpuPair(n1, g1)
                         if (n1 != n2): 
@@ -81,9 +81,8 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                             # Gather chunks destined for cross node ranks in scratch to route through IB
                             gather_rank, _ = CrossNodeGpus(n1, n2)
                             buffer_key = (n1, n2)
-                            # Send chunk to the gather_rank. Send returns a chunk reference to the 
-                            # receiver's chunk
-                            c = c.copy(gather_rank, buffer=buffer_key, ch=ch*2)
+                            # Send chunk to the gather_rank. 
+                            c = c.copy(gather_rank, buffer=buffer_key, ch=0)
                             # Group the chunks using a particular IB pair into one large chunk reference
                             AddChunk(ib_chunks, buffer_key, c) 
                         else:
@@ -93,7 +92,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                             for g2 in range(gpus_per_node):
                                 r2 = RankFromNodeGpuPair(n2, g2)
                                 c = chunk(r1, Buffer.input, r2 * instances + ch)
-                                c.copy(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=ch*2)
+                                c.copy(r2, buffer=Buffer.output, index=c.get_dst_index(), ch=0)
 
                     
 
@@ -110,14 +109,14 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections):
                     ib_channel = c.rank % 2
                 else:
                     ib_channel = ch
-                c = c.copy(scatter_rank, buffer=buffer_key, ch=ib_channel)
+                c = c.copy(scatter_rank, buffer_key, ch=ib_channel)
                 # Local scatter
                 cs = c.split(gpus_per_node * gpus_per_node)
                 for i, c in enumerate(cs):
                     # Access the chunk's destination rank and index to route it to its final place
                     final_rank = c.get_dst_rank()
                     index = c.get_dst_index()
-                    c.copy(final_rank, buffer=Buffer.output, index=index, ch=ch*2 + 1)
+                    c.copy(final_rank, Buffer.output, index, ch=2)
 
         XML() # Prints the XML
         Check()

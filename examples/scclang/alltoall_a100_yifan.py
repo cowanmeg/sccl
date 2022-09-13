@@ -8,13 +8,12 @@ from sccl.language.collectives import AllToAll
 def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False)
+    collective = AllToAll(num_ranks, instances, inplace=False)
         
     with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, protocol=protocol):
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
-                # print(f"r {r} n1 {n1} n2 {n2}")
 
                 # Gather all local chunks for the node neighbor
                 for g1 in range(gpus_per_node):
@@ -34,7 +33,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
                     rank = n1 * gpus_per_node + g1
                     ib_peer = n2 * gpus_per_node + g1
                     c = chunk(rank, f'copy_{n2}', 0, gpus_per_node)
-                    c = c.copy(ib_peer, Buffer.output, c.get_dst_index(), ch=((n1+n2) % gpus_per_node)*2+(rank%2)+2)
+                    c = c.copy(ib_peer, Buffer.output, c.get_dst_index(), ch=((n1+n2) % 2))
 
           
         # Handle local chunks within a node
@@ -44,7 +43,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
                 c = chunk(rank, Buffer.input, index)
                 c.copy(c.get_dst_rank(), Buffer.output, c.get_dst_index())
 
-        XML() # Prints the XML
+        XML() 
         Check()
 
 

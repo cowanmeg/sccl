@@ -258,17 +258,6 @@ def _greedy_scratch_sort(algorithm, gpus):
             if not addr in gpu.inputs and not addr in gpu.outputs:
                 gpu.scratch[addr] = len(gpu.scratch)
 
-def instance_metadata(gpus, instances):
-    for rank, gpu in gpus.items():
-            # Multiply metadata with instances
-            def expand_mappings(mappings):
-                return { addr * instances + i: idx * instances + i for addr, idx in mappings.items() for i in range(instances) }
-            gpu.inputs = expand_mappings(gpu.inputs)
-            gpu.outputs = expand_mappings(gpu.outputs)
-            gpu.input_chunks *= instances
-            gpu.output_chunks *= instances
-            gpu.scratch = expand_mappings(gpu.scratch)
-
 def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, 
         use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False,
         instr_fusion=True):
@@ -355,14 +344,6 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
 
     ##### Sort of the end of buffer management
 
-    # Expand copies by instances if necessary
-    # if instances > 1:
-    #     for rank, gpu in gpus.items():
-    #         for copy in itertools.chain(gpu.precopies, gpu.postcopies):
-    #             copy.src_off *= instances
-    #             copy.dst_off *= instances
-    #             copy.cnt *= instances
-
     def make_intervals(src, dst, addrs_set):
         if len(addrs_set) == 0:
             return
@@ -409,7 +390,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         for addr, src, dst in step.sends:
             grouped_sends[(src,dst)].add(addr)
 
-        # Combine sends into intervals and create multiple instances if necessary
+        # Combine sends into intervals
         sends = []
         for (src, dst), addrs in grouped_sends.items():
             intervals = list(make_intervals(src, dst, addrs))
@@ -461,14 +442,12 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
                     sends.append(send)
         sends_by_step.append(sends)
 
-    # instance_metadata(gpus, instances)
 
     # Lower into a SCCLang program
     inplace = False
     chunks = algorithm.instance.chunks
     co_name = algorithm.collective.runtime_name
     num_ranks = algorithm.topology.num_nodes()
-    # TODO: Make the collectives for synthesizer and language the same
     if co_name == 'allreduce':
         collective = lang_collectives.AllReduce(num_ranks, chunks, inplace)
     elif co_name == 'allgather':
@@ -477,10 +456,9 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         collective = lang_collectives.AllToAll(num_ranks, chunks, inplace)
     elif co_name == 'reduce_scatter':
         collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
-    # TODO: SCCLang instances are they equivalent?
     # Note: turning off instruction fusion is beneficial for some of these algos because 
     # maximal fusion requires more channels+threadblocks which interferes with the rounds.
-    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=instr_fusion)
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, instances, instr_fusion=instr_fusion)
     with program:
         for rank, gpu in gpus.items():
             for copy_op in gpu.precopies:

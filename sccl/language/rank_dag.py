@@ -6,6 +6,7 @@ from enum import Enum
 import heapq
 import functools
 from typing import DefaultDict
+import time
 
 from sccl.language.ir import *
 from sccl.language.passes import *
@@ -228,6 +229,7 @@ class InstructionDAG:
         
     # Completes metadata for chunk_steps (number of steps from a start op) and priority (number of steps to the last op)
     def _complete_metadata(self):
+        start = time.time()
         def dfs(op, cs):
             op.chunk_step = max(op.chunk_step, cs+1)
 
@@ -247,6 +249,9 @@ class InstructionDAG:
         for chunk, op in self.operations.items():
             if op.inst == Instruction.start:
                 dfs(op,-2) # Start instructions should start at -1
+
+        end = time.time()
+        print(f"Metadata {end-start}s")
     
     # Given the set of operations that operate over a particular slot (rank, buffer, idx) fixed
     # Try and replace operations with pipelined ops like receive copy send (rcs)
@@ -266,6 +271,7 @@ class InstructionDAG:
     # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
 
     def _instr_fusion(self):
+        start = time.time()
         def dfs(send_op, flow):
             op = send_op.recv_match
             for next_op in op.next:
@@ -293,6 +299,8 @@ class InstructionDAG:
                 chain = Chain(send)
                 dfs(send, chain)
                 self.chains.append(chain)
+        end = time.time()
+        print(f"Instr fusion {end-start}s")
 
     def lower_pt1(self, instances):
         self.lower_buffers(instances)
@@ -303,10 +311,12 @@ class InstructionDAG:
 
 
     def infer_dependencies(self):
+        start = time.time()
+        visited = set()
         for slot, ops in self.operations.items():
             frontier = [ops]
-            visited = set()
-            while len(frontier) > 0:
+            i = 0
+            while i < len(frontier):
                 op = frontier[0]
                 if op not in visited:
                     visited.add(op)
@@ -322,7 +332,9 @@ class InstructionDAG:
                                 depends[tb] = dep_op
                     op.depends = list(depends.values())
                     frontier += op.next
-                frontier = frontier[1:]
+                i+=1
+        end = time.time()
+        print(f"Dependencies {end-start}s")
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -436,7 +448,7 @@ class InstructionDAG:
 
         # Redo dependency analysis
         # 1. Build the instanced Rank DAG but with the threadblock/channel assignment of the base Rank DAG
-        # Clear prior state for building the DAG
+        # Clear or state for building the DAG
         self.operations = {} # slot -> operations
         self.last_writer = {} # slot -> last writing op
         self.last_readers = defaultdict(list) # slot -> list of last reading ops

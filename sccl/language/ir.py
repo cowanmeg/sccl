@@ -5,7 +5,7 @@ from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import defaultdict
-
+import time
 
 @dataclass
 class Program:
@@ -123,7 +123,7 @@ class Op:
     prev: list = field(default_factory=list) # List of instructions that happen before
     next: list = field(default_factory=list) # List of instructions that happen after
     num: int = -1
-    chunk_step: int = -1
+    chunk_step: int = -2
     priority: int = -1
     recv_match =  None
     send_match =  None
@@ -219,6 +219,7 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
+    start = time.time()
     # Figure out sizes of buffers based on usage
     buffer_sizes = defaultdict(lambda: 0)
     for gpu in program.gpus:
@@ -304,7 +305,9 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     # - Expand operations with extra dependencies with no-ops
     # - Mark the index of each operation taking any extra no-ops into account
     op_idx = {}
+    nthreadblocks = 0
     for gpu in program.gpus:
+        nthreadblocks = max(nthreadblocks, len(gpu.threadblocks))
         for tb in gpu.threadblocks:
             new_ops = []
             for op in tb.ops:
@@ -338,6 +341,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     algo_elem.set('coll', program.collective)
     algo_elem.set('inplace', str(1 if program.inplace else 0))
     algo_elem.set('maxcount', str(program.maxcount))
+    algo_elem.set('nthreadblocks', str(nthreadblocks))
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))
@@ -403,4 +407,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
 
     if pretty_print:
         ET.indent(algo_elem, space='  ')
+    end = time.time()
+    print(f"Generate xml {end-start}s")
     return ET.tostring(algo_elem, encoding='unicode')
+    
