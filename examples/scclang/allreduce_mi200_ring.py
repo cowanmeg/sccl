@@ -32,7 +32,7 @@ def rank(r, g):
     return rings[r][g]
 
         
-def allreduce_ring(instances, protocol):
+def allreduce_ring(instances, channels, protocol):
     num_rings = len(rings)
     num_chunks = num_rings * num_local_gpus
     topology = fully_connected(num_local_gpus)
@@ -46,9 +46,9 @@ def allreduce_ring(instances, protocol):
                 offset = g * num_rings + r
                 c = chunk(rank(r, index), Buffer.input, offset)
                 for step in range(1, num_local_gpus):
-                    c = chunk(rank(r, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r, recvtb=r, ch=r)
+                    c = chunk(rank(r, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r+(step%channels)*12, recvtb=r+(step%channels)*12, ch=r+(step%channels)*12)
                 for step in range(0, num_local_gpus-1):
-                    c = c.copy(rank(r, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=r, recvtb=r, ch=r)       
+                    c = c.copy(rank(r, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=r+(step%channels)*12, recvtb=r+(step%channels)*12, ch=r+(step%channels)*12)       
 
         XML()
         Check()
@@ -56,7 +56,10 @@ def allreduce_ring(instances, protocol):
 
 parser = argparse.ArgumentParser()
 parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('channels', type=int, default=1, help='number of channels per ring')
 parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: LL128')
 args = parser.parse_args()
 
-allreduce_ring(args.instances, args.protocol)
+assert args.instances * args.channels * 12 <= 32, "Uses too many channels, lower the instances and/or channels"
+
+allreduce_ring(args.instances, args.channels, args.protocol)
