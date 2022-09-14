@@ -43,12 +43,13 @@ def allreduce_ring(instances, channels, protocol):
         for g in range(num_local_gpus):
             for r in range(num_rings):
                 index = rings[r].index(g)
-                offset = g * num_rings + r
+                offset = r * num_local_gpus + g
                 c = chunk(rank(r, index), Buffer.input, offset)
+                ch = r+(offset%channels)*12
                 for step in range(1, num_local_gpus):
-                    c = chunk(rank(r, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r+(step%channels)*12, recvtb=r+(step%channels)*12, ch=r+(step%channels)*12)
+                    c = chunk(rank(r, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=ch, recvtb=ch, ch=ch)
                 for step in range(0, num_local_gpus-1):
-                    c = c.copy(rank(r, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=r+(step%channels)*12, recvtb=r+(step%channels)*12, ch=r+(step%channels)*12)       
+                    c = c.copy(rank(r, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=ch, recvtb=ch, ch=ch)       
 
         XML()
         Check()
