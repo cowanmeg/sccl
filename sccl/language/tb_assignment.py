@@ -174,7 +174,7 @@ def channel_assignment(instr_dag):
         flow = chain.connection_set()
         user_ch = chain.ops[0].channel
         ch = is_matching_flow(flow)
-        if ch == -1: # No flow matched - use the smallest available channel
+        if ch == -1 or user_ch != ch: # No flow matched - use the smallest available channel
             possible_channels = all_channels()
             for i in range(0, len(chain.ops)-1):
                 op = chain.ops[i]
@@ -183,7 +183,7 @@ def channel_assignment(instr_dag):
                 possible_channels = rank2sendch[sender][receiver].intersection(rank2recvch[receiver][sender]).intersection(possible_channels)
             # If the program specified a channel try to respect it
             # Might not be possible due to valid tb-channel constraints
-            if user_ch != -1 and user_ch in possible_channels:
+            if user_ch in possible_channels:
                 ch = user_ch
             else:
                 ch = min(possible_channels)
