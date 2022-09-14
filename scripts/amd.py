@@ -10,9 +10,9 @@ SMS = 80
 
 def allreduce_hierarchical():
     def run(instances, protocol):
-        xml = f"{home}/xmls/allreduce/hierarchical_{instances}_{protocol}.xml"
+        xml = f"{home}/xmls/hierarchical_{instances}_{protocol}.xml"
         print(f'Generating {xml}')
-        cmd = f'python3 sccl/examples/scclang/allreduce_mi200_hierarchical.py {nodes} {instances} --protocol={protocol} > {xml}'
+        cmd = f'python3 examples/scclang/allreduce_mi200_hierarchical.py {nodes} {instances} --protocol={protocol} > {xml}'
         os.system(cmd)
 
     for protocol in ['LL', 'LL128', 'Simple']:
@@ -31,9 +31,6 @@ if __name__ == '__main__':
     nodes = args.nodes
     gpus = gpus_per_node * nodes
 
-    check_create(f'{machine}')
-    check_create(f'{machine}/allreduce_{nodes}nodes')
     check_create(f'xmls')
-    check_create(f'xmls/allreduce')
 
     allreduce_hierarchical()
