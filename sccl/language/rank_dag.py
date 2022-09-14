@@ -136,7 +136,7 @@ class InstructionDAG:
     def add_start(self, ref):
         self.num_instrs += 1
         slot = (ref.rank, ref.buffer, ref.index)
-        op = Op(Instruction.start, ref.rank, ref, ref, next=set(), prev=set(), chunk_step=-1)
+        op = Op(Instruction.start, ref.rank, ref, ref, next=set(), prev=set())
         self.operations[slot] = op
         self.last_writer[slot] = op
 
@@ -231,20 +231,21 @@ class InstructionDAG:
     def _complete_metadata(self):
         start = time.time()
         def dfs(op, cs):
-            op.chunk_step = max(op.chunk_step, cs+1)
+            if op.chunk_step < cs+1:
+                op.chunk_step = cs+1
 
-            if len(op.next) == 0 and op.recv_match is None:
-                op.priority = 0
-            else:
-                for o in op.next:
-                    dfs(o, op.chunk_step)
-                # Priority = +1 of the highest priority child
-                if len(op.next) > 0:
-                    highest_next_priority = max([x.priority+1 for x in op.next])
-                    op.priority = max(highest_next_priority, op.priority)
-                if op.is_send():
-                    dfs(op.recv_match, op.chunk_step)
-                    op.priority = max(op.priority, op.recv_match.priority+1)
+                if len(op.next) == 0 and op.recv_match is None:
+                    op.priority = 0
+                else:
+                    for o in op.next:
+                        dfs(o, op.chunk_step)
+                    # Priority = +1 of the highest priority child
+                    if len(op.next) > 0:
+                        highest_next_priority = max([x.priority+1 for x in op.next])
+                        op.priority = max(highest_next_priority, op.priority)
+                    if op.is_send():
+                        dfs(op.recv_match, op.chunk_step)
+                        op.priority = max(op.priority, op.recv_match.priority+1)
 
         for chunk, op in self.operations.items():
             if op.inst == Instruction.start:
@@ -298,7 +299,8 @@ class InstructionDAG:
             if send.inst == Instruction.send:
                 chain = Chain(send)
                 dfs(send, chain)
-                self.chains.append(chain)
+                if chain.length() > 2:
+                    self.chains.append(chain)
         end = time.time()
         print(f"Instr fusion {end-start}s")
 
