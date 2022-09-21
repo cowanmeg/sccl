@@ -42,7 +42,7 @@ def allreduce_ring(num_nodes, instances, protocol, schedule):
 
     with SCCLProgram("allreduce_ring_mi200", topology, collective, instances,
         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual, interleaved_replication=False, instr_fusion=True):
-        # Intra-node reduce scatter
+        # Intra-node reduce scatter - each gpu should have 12 chunks that are contiguous
         rank2chunk = defaultdict(list)
         for n in range(num_nodes):
             for g in range(num_local_gpus):
@@ -54,7 +54,9 @@ def allreduce_ring(num_nodes, instances, protocol, schedule):
                     for step in range(1, num_local_gpus):
                         c = chunk(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r, recvtb=r, ch=r)
                     if n == 0:
-                        rank2chunk[c.rank].append(c.index)
+                        rank2chunk[c.rank].append((c.index, g))
+        for r, offsets in rank2chunk.items():
+            print(f"Rank {r} contains: {offsets}")
 
         # Inter-node allreduce (reduce scatter + allgather)
         for g in range(num_local_gpus):
@@ -62,9 +64,9 @@ def allreduce_ring(num_nodes, instances, protocol, schedule):
                 n = i % num_nodes
                 c = chunk(rank(n, g), Buffer.input, index)
                 for step in range(1, num_nodes):
-                    c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index).reduce(c, sendtb=12+n, recvtb=12+n, ch=n)
+                    c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index).reduce(c, sendtb=12, recvtb=12, ch=0)
                 for step in range(0, num_nodes-1):
-                    c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=12+n, recvtb=12+n, ch=n)        
+                    c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=12, recvtb=12, ch=0)        
 
         # Intra-node allgather
         for n in range(num_nodes):
