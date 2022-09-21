@@ -43,37 +43,43 @@ def allreduce_ring(num_nodes, instances, protocol, schedule):
     with SCCLProgram("allreduce_ring_mi200", topology, collective, instances,
         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual, interleaved_replication=False, instr_fusion=True):
         # Intra-node reduce scatter - each gpu should have 12 chunks that are contiguous
-        rank2chunk = defaultdict(list)
         for n in range(num_nodes):
             for g in range(num_local_gpus):
                 for r in range(num_rings):
-                    index = rings[r].index(g)
-                    offset = r * num_local_gpus + g
+                    index = (rings[r].index(g) + 1) % num_local_gpus
+                    offset = r + g * num_rings
                     c = chunk(ring2rank(r, n, index), Buffer.input, offset)
-                    # ch = r+(offset%channels)*12
                     for step in range(1, num_local_gpus):
                         c = chunk(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r, recvtb=r, ch=r)
-                    if n == 0:
-                        rank2chunk[c.rank].append((c.index, g))
-        for r, offsets in rank2chunk.items():
-            print(f"Rank {r} contains: {offsets}")
 
         # Inter-node allreduce (reduce scatter + allgather)
+        count = num_rings // num_nodes
         for g in range(num_local_gpus):
-            for i, index in enumerate(rank2chunk[g]):
-                n = i % num_nodes
-                c = chunk(rank(n, g), Buffer.input, index)
+            for n in range(num_nodes):
+                index = g * num_rings + n * count
+                c = chunk(rank(n, g), Buffer.input, index, count)
                 for step in range(1, num_nodes):
-                    c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index).reduce(c, sendtb=12, recvtb=12, ch=0)
+                    c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=12, recvtb=12, ch=0)
                 for step in range(0, num_nodes-1):
                     c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=12, recvtb=12, ch=0)        
+
+
+        # for g in range(num_local_gpus):
+        #     for i in range(0, num_rings):
+        #         offset = g * num_rings + i
+        #         n = i % num_nodes
+        #         c = chunk(rank(n, g), Buffer.input, offset)
+        #         for step in range(1, num_nodes):
+        #             c = chunk(rank((n+step)%num_nodes, g), Buffer.input, offset).reduce(c, sendtb=12, recvtb=12, ch=0)
+        #         for step in range(0, num_nodes-1):
+        #             c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, offset, sendtb=12, recvtb=12, ch=0)        
 
         # Intra-node allgather
         for n in range(num_nodes):
             for g in range(num_local_gpus):
                 for r in range(num_rings):
-                    index = (rings[r].index(g) - 1) % num_local_gpus
-                    offset = r * num_local_gpus + g
+                    index = rings[r].index(g)
+                    offset = r + g * num_rings
                     c = chunk(ring2rank(r, n, index), Buffer.input, offset)
                     for step in range(1, num_local_gpus):
                         c = c.copy(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=12+num_nodes+r, recvtb=12+num_nodes+r, ch=r+12)          

@@ -123,7 +123,7 @@ class Op:
     prev: list = field(default_factory=list) # List of instructions that happen before
     next: list = field(default_factory=list) # List of instructions that happen after
     num: int = -1
-    chunk_step: int = -1
+    chunk_step: int = -2
     priority: int = -1
     recv_match =  None
     send_match =  None
