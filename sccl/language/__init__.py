@@ -3,7 +3,6 @@
 
 from dataclasses import dataclass
 from enum import Enum
-import functools
 from sccl.language.ir import *
 from sccl.language.passes import *
 from sccl.language.tb_assignment import *
@@ -128,17 +127,97 @@ class SCCLProgram:
     def apply_parallelize(self):
         # Parallelize fragments of code by replicating instructions
         # TODO: Handle when counts are not evenly divided by instances
-        # TODO: Nesting parallelizes
-        # TODO: Channels
 
-        scheduled_trace = []
+        # Gather TB and channel data
+        stb_assignment = defaultdict(list)
+        rtb_assignment = defaultdict(list)
+        ch_assignment = defaultdict(list)
+            
+        for op in self.trace:
+            if type(op) is not ScheduleOp and (op.inst == ChunkInstruction.copy or op.inst == ChunkInstruction.reduce):
+                sender = op.src.rank
+                receiver = op.dst.rank
+                if sender != receiver:
+                    ch_assignment[(sender, receiver)].append(op.ch)
+                if op.sendtb != -1:
+                    stb_assignment[op.src.rank].append(op.sendtb)
+                if op.recvtb != -1:
+                    rtb_assignment[op.dst.rank].append(op.recvtb)
+
+        ch2rep = defaultdict(dict)
+        sendtb2rep = defaultdict(dict)
+        recvtb2rep = defaultdict(dict)
+
+        self.scheduled_trace = []
         replicate = 1
         for op in self.trace:
-            if op is ScheduleOp and op.type is ScheduleType.parallel_enter:
+            if type(op) is ScheduleOp and op.op is ScheduleType.parallel_enter:
                 replicate *= op.factor
-            if op is ScheduleOp and op.type is ScheduleType.parallel_exit:
-                replicate /= op.factor
-            # print(op, replicate)
+            elif type(op) is ScheduleOp and op.op is ScheduleType.parallel_exit:
+                replicate //= op.factor
+            elif replicate > 1:
+                sender = op.src.rank
+                receiver = op.dst.rank
+
+                if op.ch not in ch2rep[(sender, receiver)]:
+                    replicated_base_ch = max(ch_assignment[(sender, receiver)]) + 1
+                    ch2rep[(sender,receiver)][op.ch] = replicated_base_ch
+                else:
+                    replicated_base_ch = ch2rep[(sender,receiver)][op.ch]
+
+                if op.sendtb not in sendtb2rep[sender]:
+                    replicated_base_sendtb = max(stb_assignment[sender]) + 1
+                    sendtb2rep[sender][op.sendtb] = replicated_base_sendtb
+                else:
+                    replicated_base_sendtb = sendtb2rep[sender][op.sendtb] 
+
+                if op.recvtb not in recvtb2rep[receiver]:
+                    replicated_base_recvtb = max(rtb_assignment[receiver]) + 1
+                    recvtb2rep[receiver][op.recvtb] = replicated_base_recvtb
+                else:
+                    replicated_base_recvtb = recvtb2rep[receiver][op.recvtb]
+
+                for i in range(replicate):
+                    iop = op.copy()
+                    src = op.src
+                    dst = op.dst
+                    isrc = Ref(src.rank, src.buffer, src.index+i, src.size//replicate, src.prog)
+                    idst = Ref(dst.rank, dst.buffer, dst.index+i, dst.size//replicate, dst.prog)
+                    iop.src = isrc
+                    iop.dst = idst
+                    if op.ch != -1:
+                        iop.ch = replicated_base_ch + i
+                        ch_assignment[(sender, receiver)].append(iop.ch)
+                    if op.sendtb != -1:
+                        iop.sendtb = replicated_base_sendtb + i
+                        stb_assignment[sender].append(iop.sendtb)
+                    if op.recvtb != -1:
+                        iop.recvtb = replicated_base_recvtb + i
+                        rtb_assignment[receiver].append(iop.recvtb)
+                    self.scheduled_trace.append(iop)
+            else:
+                self.scheduled_trace.append(op)
+
+    def lower_instr_dag(self):
+        for op in self.scheduled_trace:
+            sender = op.src.rank
+            receiver = op.dst.rank
+            if op.inst == ChunkInstruction.copy:
+                if sender != receiver:
+                    sop = self.instr_dag.add_send(sender, op.src, op.dst, op.sendtb, op.ch)
+                    rop = self.instr_dag.add_recv(receiver, op.src, op.dst, op.recvtb, op.ch, sop)
+                    sop.recv_match = rop
+                else:
+                    self.instr_dag.add_copy(sender, op.src, op.dst, op.sendtb, op.ch)
+            elif op.inst == ChunkInstruction.reduce:
+                if sender != receiver:
+                    sop = self.instr_dag.add_send(sender, op.src, op.dst, op.sendtb, op.ch)
+                    rop = self.instr_dag.add_recv_reduce_copy(receiver, op.src, op.dst, op.recvtb, op.ch, sop)
+                    sop.recv_match = rop
+                else:
+                    self.instr_dag.add_reduce(sender, op.src, op.dst, op.sendtb, op.ch)
+
+
 
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
@@ -147,7 +226,7 @@ class SCCLProgram:
 
     def get_maxcount(self):
         maxcount = 1
-        for op in self.trace:
+        for op in self.scheduled_trace:
             if type(op) is ChunkOp:
                 maxcount = max(maxcount, op.src.size)
         return maxcount
@@ -158,6 +237,7 @@ class SCCLProgram:
         # self.chunk_dag.channel_assignment()
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
         self.apply_parallelize()
+        self.lower_instr_dag()
         self.instr_dag.convert_set_list() # Pre-emptively convert sets to lists
         if self.instr_fusion:
             self.instr_dag.optimize()
@@ -219,11 +299,11 @@ class parallelize():
         _parallel_id += 1
 
     def __enter__(self):
-        print("Entering parallelize", self.instances, self.id)
+        # print("Entering parallelize", self.instances, self.id)
         _curr().trace.append(ScheduleOp(ScheduleType.parallel_enter, self.instances))
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        print("Existing parallelize", self.instances, self.id)
+        # print("Existing parallelize", self.instances, self.id)
         _curr().trace.append(ScheduleOp(ScheduleType.parallel_exit, self.instances))
 
 @dataclass
@@ -291,14 +371,14 @@ class Ref(ChunkRef):
         self.prog.trace.append(chunkop)
 
         # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
-        sender = self.rank
-        receiver = dst
-        if sender != receiver:
-            sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb, ch)
-            rop = self.prog.instr_dag.add_recv(receiver, self, dst_chunkref, recvtb, ch, sop)
-            sop.recv_match = rop
-        else:
-            self.prog.instr_dag.add_copy(sender, self, dst_chunkref, sendtb, ch)
+        # sender = self.rank
+        # receiver = dst
+        # if sender != receiver:
+        #     sop = self.prog.instr_dag.add_send(sender, self, dst_chunkref, sendtb, ch)
+        #     rop = self.prog.instr_dag.add_recv(receiver, self, dst_chunkref, recvtb, ch, sop)
+        #     sop.recv_match = rop
+        # else:
+        #     self.prog.instr_dag.add_copy(sender, self, dst_chunkref, sendtb, ch)
 
         return dst_chunkref
 
@@ -320,12 +400,13 @@ class Ref(ChunkRef):
 
         # reduce_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         # self.prog.chunk_dag.add_reduce(chunks1, chunks2, reduce_chunks, self, dst_chunkref, sendtb, recvtb, ch)
-        if src != dst:
-            sop = self.prog.instr_dag.add_send(src, other_chunkref, self, sendtb, ch)
-            rop = self.prog.instr_dag.add_recv_reduce_copy(dst, other_chunkref, self, recvtb, ch, sop)
-            sop.recv_match = rop
-        else:
-            self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
+        
+        # if src != dst:
+        #     sop = self.prog.instr_dag.add_send(src, other_chunkref, self, sendtb, ch)
+        #     rop = self.prog.instr_dag.add_recv_reduce_copy(dst, other_chunkref, self, recvtb, ch, sop)
+        #     sop.recv_match = rop
+        # else:
+        #     self.prog.instr_dag.add_reduce(src, other_chunkref, self, sendtb, ch)
 
         return self
 
@@ -402,6 +483,9 @@ class ChunkOp():
     sendtb: int = -1
     recvtb: int = -1
     ch: int = -1
+
+    def copy(self):
+        return ChunkOp(self.inst, self.src, self.dst, self.sendtb, self.recvtb, self.ch)
 
 # @dataclass
 # class ChunkOp():
