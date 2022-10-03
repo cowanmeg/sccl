@@ -82,7 +82,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('num_rings', type=int, default=12, choices=range(1, 13), help='Number of rings [1-12]')
-parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: LL128')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 assert args.num_nodes > 1, "Multi-node allreduce. num_nodes > 1"
