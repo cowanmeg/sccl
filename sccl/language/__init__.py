@@ -129,20 +129,20 @@ class SCCLProgram:
         # TODO: Handle when counts are not evenly divided by instances
 
         # Gather TB and channel data
-        stb_assignment = defaultdict(list)
-        rtb_assignment = defaultdict(list)
-        ch_assignment = defaultdict(list)
+        stb_assignment = defaultdict(set)
+        rtb_assignment = defaultdict(set)
+        ch_assignment = defaultdict(set)
             
         for op in self.trace:
             if type(op) is not ScheduleOp and (op.inst == ChunkInstruction.copy or op.inst == ChunkInstruction.reduce):
                 sender = op.src.rank
                 receiver = op.dst.rank
                 if sender != receiver:
-                    ch_assignment[(sender, receiver)].append(op.ch)
+                    ch_assignment[(sender, receiver)].add(op.ch)
                 if op.sendtb != -1:
-                    stb_assignment[op.src.rank].append(op.sendtb)
+                    stb_assignment[op.src.rank].add(op.sendtb)
                 if op.recvtb != -1:
-                    rtb_assignment[op.dst.rank].append(op.recvtb)
+                    rtb_assignment[op.dst.rank].add(op.recvtb)
 
         ch2rep = defaultdict(dict)
         sendtb2rep = defaultdict(dict)
@@ -187,13 +187,13 @@ class SCCLProgram:
                     iop.dst = idst
                     if op.ch != -1:
                         iop.ch = replicated_base_ch + i
-                        ch_assignment[(sender, receiver)].append(iop.ch)
+                        ch_assignment[(sender, receiver)].add(iop.ch)
                     if op.sendtb != -1:
                         iop.sendtb = replicated_base_sendtb + i
-                        stb_assignment[sender].append(iop.sendtb)
+                        stb_assignment[sender].add(iop.sendtb)
                     if op.recvtb != -1:
                         iop.recvtb = replicated_base_recvtb + i
-                        rtb_assignment[receiver].append(iop.recvtb)
+                        rtb_assignment[receiver].add(iop.recvtb)
                     self.scheduled_trace.append(iop)
             else:
                 self.scheduled_trace.append(op)

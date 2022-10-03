@@ -262,7 +262,7 @@ def insert_connection_dependencies(instr_dag):
 
             recv0.next.append(recv1)
             recv1.prev.add(recv0)
-    _detect_cycle(instr_dag)
+    # _detect_cycle(instr_dag)
     
 
 def _detect_cycle(instr_dag):
