@@ -52,34 +52,32 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                         c = chunk(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r, recvtb=r, ch=r)
 
         # Copy over all chunks to odd gpus
-        for g in range(num_local_gpus):
-            for n in range(num_nodes):
-                if g % 2 == 0:
-                    for r in range(0, num_rings):
-                        index = g * num_rings + r
-                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index, sendtb=2*num_rings+1, recvtb=2*num_rings+1, ch=0)
+        # for g in range(num_local_gpus):
+        #     for n in range(num_nodes):
+        #         if g % 2 == 0:
+        #             for r in range(0, num_rings):
+        #                 index = g * num_rings + r
+        #                 chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index, sendtb=2*num_rings+1, recvtb=2*num_rings+1, ch=0)
 
         # Inter-node allreduce (reduce scatter + allgather)
-        count = num_rings // num_nodes * 2
-        with parallelize(2):
+        count = num_rings // num_nodes
+        with parallelize(1):
             for g in range(num_local_gpus):
-                # Chunks are only on odd gpus
-                if g % 2 == 1:
-                    for n in range(num_nodes):
-                        index = (g-1) * num_rings + n * count
-                        c = chunk(rank(n, g), Buffer.input, index, count)
-                        for step in range(1, num_nodes):
-                            c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)
-                        for step in range(0, num_nodes-1):
-                            c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)        
+                for n in range(num_nodes):
+                    index = g * num_rings + n * count
+                    c = chunk(rank(n, g), Buffer.input, index, count)
+                    for step in range(1, num_nodes):
+                        c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)
+                    for step in range(0, num_nodes-1):
+                        c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)      
 
         # Copy chunks onto even gpus
-        for g in range(num_local_gpus):
-            for n in range(num_nodes):
-                if g % 2 == 1:
-                    for r in range(0, num_rings):
-                        index = (g-1) * num_rings + r
-                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g-1), Buffer.input, index, sendtb=2*num_rings+1, recvtb=2*num_rings+1, ch=0)
+        # for g in range(num_local_gpus):
+        #     for n in range(num_nodes):
+        #         if g % 2 == 1:
+        #             for r in range(0, num_rings):
+        #                 index = (g-1) * num_rings + r
+        #                 chunk(rank(n,g), Buffer.input, index).copy(rank(n, g-1), Buffer.input, index, sendtb=2*num_rings+1, recvtb=2*num_rings+1, ch=0)
 
         # Intra-node allgather
         for n in range(num_nodes):
