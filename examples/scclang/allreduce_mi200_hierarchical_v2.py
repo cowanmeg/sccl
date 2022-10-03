@@ -67,9 +67,9 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                     index = g * num_rings + n * count
                     c = chunk(rank(n, g), Buffer.input, index, count)
                     for step in range(1, num_nodes):
-                        c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=2*num_rings+n, recvtb=2*num_rings+n, ch=n)
+                        c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)
                     for step in range(0, num_nodes-1):
-                        c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=2*num_rings+n, recvtb=2*num_rings+n, ch=n)      
+                        c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)      
 
         # Copy chunks onto even gpus
         # for g in range(num_local_gpus):
@@ -96,7 +96,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('num_rings', type=int, default=12, choices=range(1, 13), help='Number of rings [1-12]')
-parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL'], help ='NCCL protocol. Default: Simple')
+parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 assert args.num_nodes > 1, "Multi-node allreduce. num_nodes > 1"
