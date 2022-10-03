@@ -33,9 +33,8 @@ def ring2rank(r, n, g):
 def rank(n, g):
     return n * num_local_gpus + g
         
-def allreduce_ring(num_nodes, instances, protocol):
+def allreduce_ring(num_nodes, instances, num_rings, protocol):
     size = num_nodes * num_local_gpus
-    num_rings = len(rings)
     num_chunks = num_rings* num_local_gpus
     topology = fully_connected(size)
     collective = AllReduce(size, num_chunks, True)
@@ -52,44 +51,19 @@ def allreduce_ring(num_nodes, instances, protocol):
                     for step in range(1, num_local_gpus):
                         c = chunk(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r, recvtb=r, ch=r)
 
-        # Copy over all chunks to odd gpus
-        for g in range(num_local_gpus):
-            for n in range(num_nodes):
-                if g % 2 == 0:
-                    for r in range(0, num_rings):
-                        index = g * num_rings + r
-                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index)
 
         # Inter-node allreduce (reduce scatter + allgather)
-        count = num_rings // num_nodes * 2
+        intranode_rings = num_rings // num_nodes
         for g in range(num_local_gpus):
-            # Chunks are only on odd gpus
-            if g % 2 == 1:
-                for n in range(num_nodes):
-                    index = (g-1) * num_rings + n * count
-                    c = chunk(rank(n, g), Buffer.input, index, count)
-                    for step in range(1, num_nodes):
-                        c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=24+n%2, recvtb=24+n%2, ch=n%2)
-                    for step in range(0, num_nodes-1):
-                        c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=24+n%2, recvtb=24+n%2, ch=n%2)        
-
-        # Copy chunks onto even gpus
-        for g in range(num_local_gpus):
-            for n in range(num_nodes):
-                if g % 2 == 1:
-                    for r in range(0, num_rings):
-                        index = (g-1) * num_rings + r
-                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g-1), Buffer.input, index)
-
-        # for g in range(num_local_gpus):
-        #     for i in range(0, num_rings):
-        #         offset = g * num_rings + i
-        #         n = i % num_nodes
-        #         c = chunk(rank(n, g), Buffer.input, offset)
-        #         for step in range(1, num_nodes):
-        #             c = chunk(rank((n+step)%num_nodes, g), Buffer.input, offset).reduce(c, sendtb=12, recvtb=12, ch=0)
-        #         for step in range(0, num_nodes-1):
-        #             c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, offset, sendtb=12, recvtb=12, ch=0)        
+            for i in range(0, num_rings):
+                offset = g * num_rings + i
+                n = i % num_nodes
+                c = chunk(rank(n, g), Buffer.input, offset)
+                x = (i//2) % intranode_rings
+                for step in range(1, num_nodes):
+                    c = chunk(rank((n+step)%num_nodes, g), Buffer.input, offset).reduce(c, sendtb=num_rings*2+x, recvtb=num_rings*2+x, ch=x)
+                for step in range(0, num_nodes-1):
+                    c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, offset, sendtb=num_rings*2+x, recvtb=num_rings*2+x, ch=x)        
 
         # Intra-node allgather
         for n in range(num_nodes):
@@ -99,7 +73,7 @@ def allreduce_ring(num_nodes, instances, protocol):
                     offset = r + g * num_rings
                     c = chunk(ring2rank(r, n, index), Buffer.input, offset)
                     for step in range(1, num_local_gpus):
-                        c = c.copy(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=12+r, recvtb=12+r, ch=r+12)          
+                        c = c.copy(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=num_rings+r, recvtb=num_rings+r, ch=num_rings+r)          
         XML()
         Check()
 
@@ -107,9 +81,10 @@ def allreduce_ring(num_nodes, instances, protocol):
 parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('num_rings', type=int, default=12, choices=range(1, 13), help='Number of rings [1-12]')
 parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: LL128')
 args = parser.parse_args()
 
 assert args.num_nodes > 1, "Multi-node allreduce. num_nodes > 1"
 assert 12 % args.num_nodes == 0, "Algorithm requires the number of nodes to divide 12"
-allreduce_ring(args.num_nodes, args.instances, args.protocol)
+allreduce_ring(args.num_nodes, args.instances, args.num_rings, args.protocol)
