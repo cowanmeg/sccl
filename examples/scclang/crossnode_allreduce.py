@@ -59,10 +59,14 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
         #                 index = g * num_rings + r
         #                 chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index, sendtb=2*num_rings+1, recvtb=2*num_rings+1, ch=0)
 
+        for g in range(size):
+            for i in range(num_rings, num_chunks):
+                chunk(g, Buffer.input, i).copy(g, Buffer.input, (i+1)%num_chunks)
+
         # Inter-node allreduce (reduce scatter + allgather)
         count = num_rings // num_nodes
         assert count <= num_rings // num_nodes
-        with parallelize(3):
+        with parallelize(2):
             for g in range(1):
                 for n in range(num_nodes):
                     index = g * num_rings + n * count
