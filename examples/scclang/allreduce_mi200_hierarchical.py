@@ -59,7 +59,7 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                 offset = g * num_rings + i
                 n = i % num_nodes
                 c = chunk(rank(n, g), Buffer.input, offset)
-                x = 0
+                x = (i//2) % intranode_rings
                 for step in range(1, num_nodes):
                     c = chunk(rank((n+step)%num_nodes, g), Buffer.input, offset).reduce(c, sendtb=num_rings*2+x, recvtb=num_rings*2+x, ch=x)
                 for step in range(0, num_nodes-1):

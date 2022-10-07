@@ -1,6 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+from bdb import effective
+import math
 from dataclasses import dataclass
 from enum import Enum
 from sccl.language.ir import *
@@ -44,12 +46,13 @@ class SCCLProgram:
         # self.chunk_dag = ChunkDAG()
         self.buffers = collective.init_buffers()
         self.instr_dag = InstructionDAG(self.num_ranks, self.buffers, self.protocol)
-        for r in range(self.num_ranks):
-            for index, chunk in enumerate(self.buffers[r][Buffer.input]):
-                buffer, index = self.collective.get_buffer_index(r, Buffer.input, index)
+        # TODO: Moved Instruction DAG initialization
+        # for r in range(self.num_ranks):
+        #     for index, chunk in enumerate(self.buffers[r][Buffer.input]):
+        #         buffer, index = self.collective.get_buffer_index(r, Buffer.input, index)
                 # self.chunk_dag.init_chunk(chunk, ref)
-                ref = self.get_ref(r, buffer, index, 1)
-                self.instr_dag.add_start(ref)
+                # ref = self.get_ref(r, buffer, index, 1)
+                # self.instr_dag.add_start(ref)
         self.trace = []
 
     def __enter__(self):
@@ -126,7 +129,19 @@ class SCCLProgram:
 
     def apply_parallelize(self):
         # Parallelize fragments of code by replicating instructions
-        # TODO: Handle when counts are not evenly divided by instances
+        # TODO: This code is very messy....clean up
+
+        # Determine the new chunk
+        replicate = 1
+        effective_chunk_size = 1
+        for op in self.trace:
+            if type(op) is ScheduleOp and op.op is ScheduleType.parallel_enter:
+                replicate *= op.factor
+            elif type(op) is ScheduleOp and op.op is ScheduleType.parallel_exit:
+                replicate //= op.factor
+            elif replicate > 1:
+                if op.src.size * effective_chunk_size % replicate != 0:
+                    effective_chunk_size = (op.src.size * replicate * effective_chunk_size) // math.gcd(op.src.size * replicate, effective_chunk_size)
 
         # Gather TB and channel data
         stb_assignment = defaultdict(set)
@@ -158,8 +173,9 @@ class SCCLProgram:
             elif replicate > 1:
                 sender = op.src.rank
                 receiver = op.dst.rank
-
-                if op.ch not in ch2rep[(sender, receiver)]:
+                if sender == receiver:
+                    replicated_base_ch = 0 # Technically no channel needed for local op tb
+                elif op.ch not in ch2rep[(sender, receiver)]:
                     replicated_base_ch = max(ch_assignment[(sender, receiver)]) + 1
                     ch2rep[(sender,receiver)][op.ch] = replicated_base_ch
                 else:
@@ -181,13 +197,14 @@ class SCCLProgram:
                     iop = op.copy()
                     src = op.src
                     dst = op.dst
-                    isrc = Ref(src.rank, src.buffer, src.index+i, src.size//replicate, src.prog)
-                    idst = Ref(dst.rank, dst.buffer, dst.index+i, dst.size//replicate, dst.prog)
+                    isrc = Ref(src.rank, src.buffer, src.index*effective_chunk_size+i, src.size*effective_chunk_size//replicate, src.prog)
+                    idst = Ref(dst.rank, dst.buffer, dst.index*effective_chunk_size+i, dst.size*effective_chunk_size//replicate, dst.prog)
                     iop.src = isrc
                     iop.dst = idst
                     if op.ch != -1:
                         iop.ch = replicated_base_ch + i
-                        ch_assignment[(sender, receiver)].add(iop.ch)
+                        if sender != receiver:
+                            ch_assignment[(sender, receiver)].add(iop.ch)
                     if op.sendtb != -1:
                         iop.sendtb = replicated_base_sendtb + i
                         stb_assignment[sender].add(iop.sendtb)
@@ -196,9 +213,23 @@ class SCCLProgram:
                         rtb_assignment[receiver].add(iop.recvtb)
                     self.scheduled_trace.append(iop)
             else:
+                op.src.size *= effective_chunk_size
+                op.src.index *= effective_chunk_size
+                op.dst.size *= effective_chunk_size
+                op.dst.index *= effective_chunk_size
                 self.scheduled_trace.append(op)
+        return effective_chunk_size
 
-    def lower_instr_dag(self):
+    def lower_instr_dag(self, effective_chunk_size):
+        # Initialize chunks
+        for r in range(self.num_ranks):
+            for index, chunk in enumerate(self.buffers[r][Buffer.input]):
+                buffer, index = self.collective.get_buffer_index(r, Buffer.input, index)
+                for i in range(effective_chunk_size):
+                    ref = self.get_ref(r, buffer, index*effective_chunk_size + i, 1)
+                    self.instr_dag.add_start(ref)
+
+        # Build chunk dag from the scheduled trace of ops
         for op in self.scheduled_trace:
             sender = op.src.rank
             receiver = op.dst.rank
@@ -236,8 +267,8 @@ class SCCLProgram:
         # self.chunk_dag._complete_metadata()
         # self.chunk_dag.channel_assignment()
         # self.chunk_dag.lower_instr_dag(self.instr_dag)
-        self.apply_parallelize()
-        self.lower_instr_dag()
+        effective_chunk_size = self.apply_parallelize()
+        self.lower_instr_dag(effective_chunk_size)
         self.instr_dag.convert_set_list() # Pre-emptively convert sets to lists
         if self.instr_fusion:
             self.instr_dag.optimize()

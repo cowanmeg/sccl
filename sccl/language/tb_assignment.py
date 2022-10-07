@@ -136,8 +136,7 @@ def topo_sort_instrs(instr_dag):
                         heapq.heappush(ops, (priority(o), o))
 
     instr_dag.ordered_instrs = ordered
-    # print("Number of instrs", instr_dag.num_instrs)
-    # print("Number of ordered instrs", len(visited))
+    assert instr_dag.num_instrs == len(visited), f'Compilation error: TB assignment {instr_dag.num_instrs} {len(visited)}'
     return ordered
 
 # TODO: Merge flow channel assignment with fusion
