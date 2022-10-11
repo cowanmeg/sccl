@@ -202,7 +202,7 @@ class SCCLProgram:
                     iop.src = isrc
                     iop.dst = idst
                     if op.ch != -1:
-                        iop.ch = replicated_base_ch + i
+                        iop.ch = replicated_base_ch + i if i > 0 else op.ch
                         if sender != receiver:
                             ch_assignment[(sender, receiver)].add(iop.ch)
                     if op.sendtb != -1:

@@ -35,7 +35,7 @@ def rank(n, g):
         
 def allreduce_ring(num_nodes, instances, num_rings, protocol):
     size = num_nodes * num_local_gpus
-    num_chunks = num_rings* num_local_gpus
+    num_chunks = num_rings * num_local_gpus
     topology = fully_connected(size)
     collective = AllReduce(size, num_chunks, True)
 
@@ -60,11 +60,13 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                         chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index, sendtb=2*num_rings+1, recvtb=2*num_rings+1, ch=0)
 
         # Inter-node allreduce (reduce scatter + allgather)
-        count = num_rings*2 // num_nodes
-        with parallelize(1):
-            for g in range(1, num_local_gpus, 2):
-                for n in range(num_nodes):
-                    index = (g-1) * num_rings + n * count
+        count = num_rings // num_nodes
+        num_chunks = num_rings * 2  // count // num_nodes
+        print(f"Count {count} Number of chunks {num_chunks}")
+        for g in range(1, num_local_gpus, 2):
+            for n in range(num_nodes):
+                for i in range(num_chunks):
+                    index = (g-1) * num_rings + n * count + i * count * num_chunks
                     c = chunk(rank(n, g), Buffer.input, index, count)
                     for step in range(1, num_nodes):
                         c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=2*num_rings, recvtb=2*num_rings, ch=0)
@@ -96,7 +98,7 @@ parser = argparse.ArgumentParser()
 parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('num_rings', type=int, default=12, choices=range(1, 13), help='Number of rings [1-12]')
-parser.add_argument('--protocol', type=str, default='LL128', choices=['Simple', 'LL'], help ='NCCL protocol. Default: Simple')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL'], help ='NCCL protocol. Default: Simple')
 args = parser.parse_args()
 
 assert args.num_nodes > 1, "Multi-node allreduce. num_nodes > 1"
