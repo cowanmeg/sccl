@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import sys
 from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
@@ -218,7 +219,7 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
-def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
+def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False, fname=None):
     # Figure out sizes of buffers based on usage
     buffer_sizes = defaultdict(lambda: 0)
     for gpu in program.gpus:
@@ -403,4 +404,11 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
 
     if pretty_print:
         ET.indent(algo_elem, space='  ')
-    return ET.tostring(algo_elem, encoding='unicode')
+
+    tree = ET.ElementTree(algo_elem)
+    if fname is None:
+        tree.write(sys.stdout.buffer)
+    else:
+        with open(fname, 'wb') as f:
+            tree.write(f)
+    # return ET.tostring(algo_elem, encoding='unicode')

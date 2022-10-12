@@ -252,8 +252,15 @@ class SCCLProgram:
 
     # Checks that all chunks that should be on each rank
     # are present in the output buffer.
-    def check(self):
+    def prgm_check(self):
         return self.collective.check(self)
+
+    def ir_check(self):
+        # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
+        check_dependency_cycles(self.instr_dag.instanced_tbs)
+        check_threadblock_ordering(self.instr_dag)
+        check_deadlock(self.instr_dag, self.protocol)
+
 
     def get_maxcount(self):
         maxcount = 1
@@ -282,17 +289,10 @@ class SCCLProgram:
             auto_assign_tbs(self.instr_dag)
         self.instr_dag.lower_pt1(self.instances)
         gpu_prgms = self.instr_dag.lower_pt2(self.instances, self.interleaved_replication)
-
-        if self.check_xml:
-            # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
-            # For very large programs, turn off check_xml when shipping 
-            check_dependency_cycles(self.instr_dag.instanced_tbs)
-            check_threadblock_ordering(self.instr_dag)
-            # check_deadlock(self.instr_dag, self.protocol)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, self.get_maxcount(), gpu_prgms)  
 
-    def generate_xml(self):
-        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
+    def generate_xml(self, fname):
+        ir_to_xml(self.lower(), fname=fname, dependence_nop=self.dependence_nop)
     
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
@@ -313,11 +313,14 @@ def chunk(rank, buffer, index, size=1):
 def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
 
-def XML():
-   print(_curr().generate_xml())
+def XML(fname=None):
+    _curr().generate_xml(fname)
 
 def Check():
-    return _curr().check()
+    return _curr().prgm_check()
+
+def CheckIR():
+    return _curr().ir_check()
 
 def InstrDAG():
     return _curr().instr_dag
@@ -330,11 +333,9 @@ class parallelize():
         _parallel_id += 1
 
     def __enter__(self):
-        # print("Entering parallelize", self.instances, self.id)
         _curr().trace.append(ScheduleOp(ScheduleType.parallel_enter, self.instances))
 
     def __exit__(self, exc_type, exc_value, exc_traceback):
-        # print("Existing parallelize", self.instances, self.id)
         _curr().trace.append(ScheduleOp(ScheduleType.parallel_exit, self.instances))
 
 @dataclass

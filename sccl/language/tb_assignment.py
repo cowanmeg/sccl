@@ -37,6 +37,8 @@ def manual_assign_tbs(instr_dag):
             raise Exception(f"Illegal threadblock assignment. Trying to add {op} to threadblock {tbid}\n" \
                 f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
                 f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
+    # debug_print(instr_dag)
+
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs):
     options = []
@@ -99,6 +101,14 @@ def auto_assign_tbs(instr_dag):
         op.step = len(tb.ops)-1
         op.tb = tbid
         current_tb_step[rank][tbid] = op.chunk_step
+
+def debug_print(instr_dag):
+    for rank in range(instr_dag.num_ranks):
+        print(f"Rank={rank}")
+        for tbid, tb in instr_dag.tbs[rank].items():
+            print(f"  TB={tbid} send={tb.send} recv={tb.recv} ch={tb.channel}")
+            for op in tb.ops:
+                print(priority(op), op)
 
 def priority(op):
     return ((op.chunk_step, -op.priority, op.dst.index))

@@ -1,8 +1,8 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from collections import deque
 import sys
+from collections import deque
 from sccl.language.ir import *
 
 buf_size = 4194304 # 4MB
@@ -33,7 +33,10 @@ class SimulatedThreadblock:
     def next_inst(self):
         if  self.instr_done() and self.step < len(self.tb)-1:
             self.step += 1
-            self.chunks_remaining = self.tb[self.step].src.size
+            if self.tb[self.step].inst is Instruction.nop:
+                self.chunks_remaining = 1
+            else:
+                self.chunks_remaining = self.tb[self.step].src.size
         return self.tb[self.step]
 
     # Simulates part of an instruction
@@ -165,7 +168,8 @@ def check_deadlock(instr_dag, protocol):
         for rank, rank_tbs in enumerate(tbs):
             for tb in rank_tbs.values():
                 if not tb.finished():
-                    print(f"Rank {rank} Threadblock step: {tb.step} {tb.chunks_remaining}")
+                    print(f"Rank {rank} Threadblock step:{tb.step} Chunks remaining:{tb.chunks_remaining}")
+                    print(f"TB op {tb.tb[tb.step]}")
 
 
 # Creates a dependency between a send and recv.
