@@ -40,7 +40,7 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
     collective = AllReduce(size, num_chunks, True)
 
     with SCCLProgram("allreduce_ring_mi200", topology, collective, instances,
-        protocol=protocol, threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=False, instr_fusion=False):
+        protocol=protocol, threadblock_policy=ThreadblockPolicy.manual, interleaved_replication=False, instr_fusion=True):
         # Intra-node reduce scatter - each gpu should have 12 chunks that are contiguous
         for n in range(num_nodes):
             for g in range(num_local_gpus):
@@ -49,7 +49,7 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                     offset = r + g * num_rings
                     c = chunk(ring2rank(r, n, index), Buffer.input, offset)
                     for step in range(1, num_local_gpus):
-                        c = chunk(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, ch=r)
+                        c = chunk(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset).reduce(c, sendtb=r+4, recvtb=r+4, ch=r)
 
         # Copy over all chunks to odd gpus
         for g in range(num_local_gpus):
@@ -57,9 +57,10 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                 if g % 2 == 0:
                     for r in range(0, num_rings):
                         index = g * num_rings + r
-                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index, ch=0)
+                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g+1), Buffer.input, index, sendtb=2, recvtb=2, ch=0)
 
         # Inter-node allreduce (reduce scatter + allgather)
+        # TODO: Update the instruction fusion pass - not handling multicount correctly
         count = num_rings // num_nodes
         num_chunks = num_rings * 2  // count // num_nodes
         for g in range(1, num_local_gpus, 2):
@@ -68,9 +69,9 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                     index = (g-1) * num_rings + n * count + i * count * num_chunks
                     c = chunk(rank(n, g), Buffer.input, index, count)
                     for step in range(1, num_nodes):
-                        c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, ch=0)
+                        c = chunk(rank((n+step)%num_nodes, g), Buffer.input, c.index, count).reduce(c, sendtb=0, recvtb=1, ch=0)
                     for step in range(0, num_nodes-1):
-                        c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, ch=0)      
+                        c = c.copy(rank((n+step)%num_nodes, g), Buffer.input, c.index, sendtb=0, recvtb=1, ch=0)      
 
         # Copy chunks onto even gpus
         for g in range(num_local_gpus):
@@ -78,9 +79,9 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                 if g % 2 == 1:
                     for r in range(0, num_rings):
                         index = (g-1) * num_rings + r
-                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g-1), Buffer.input, index, ch=1)
+                        chunk(rank(n,g), Buffer.input, index).copy(rank(n, g-1), Buffer.input, index, sendtb=3, recvtb=3, ch=1)
 
-        # Intra-node allgather
+        # # Intra-node allgather
         for n in range(num_nodes):
             for g in range(num_local_gpus):
                 for r in range(num_rings):
@@ -88,7 +89,7 @@ def allreduce_ring(num_nodes, instances, num_rings, protocol):
                     offset = r + g * num_rings
                     c = chunk(ring2rank(r, n, index), Buffer.input, offset)
                     for step in range(1, num_local_gpus):
-                        c = c.copy(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset, ch=num_rings+r)          
+                        c = c.copy(ring2rank(r, n, (index+step)%num_local_gpus), Buffer.input, offset, sendtb=num_rings+r+4, recvtb=num_rings+r+4, ch=num_rings+r)          
         XML('temp.xml')
         # Check()
         CheckIR()

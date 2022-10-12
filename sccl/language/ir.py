@@ -220,9 +220,11 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
 
 
 def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False, fname=None):
-    # Figure out sizes of buffers based on usage
+    # Figure out sizes of buffers based on usage and max threadblocks
     buffer_sizes = defaultdict(lambda: 0)
+    max_threadblocks = 0
     for gpu in program.gpus:
+        max_threadblocks = max(max_threadblocks, len(gpu.threadblocks))
         for tb in gpu.threadblocks:
             for op in tb.ops:
                 if op.inst in _local_src_insts:
@@ -339,6 +341,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     algo_elem.set('coll', program.collective)
     algo_elem.set('inplace', str(1 if program.inplace else 0))
     algo_elem.set('maxcount', str(program.maxcount))
+    algo_elem.set('nthreadblocks', str(max_threadblocks))
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))
