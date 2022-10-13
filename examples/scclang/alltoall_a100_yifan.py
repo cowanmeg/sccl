@@ -56,12 +56,5 @@ parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100
 parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
-if args.device == 'V100':
-    device = V100
-elif args.device == 'A100':
-    device = A100
-else:
-    device = Generic
-
-
+device = get_device(args.device)
 alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.protocol, device, args.output)

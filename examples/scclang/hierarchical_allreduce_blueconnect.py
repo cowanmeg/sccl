@@ -36,14 +36,14 @@ def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_
             c.copy(((step+1+ch) % size)*rank_step + rank_offset, Buffer.input, index, sendtb=sendtbf(index), recvtb=recvtbf(index), ch=chanf(index))
 
 
-def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, schedule):
+def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, schedule, device, fname):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_gpus, True)
 
 
     with SCCLProgram("allreduce_hierarchical_v2", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=True, instr_fusion=True):
+        interleaved_replication=True, instr_fusion=True, device=device):
 
         local_chunk_size = num_nodes
         if schedule == 'auto':
@@ -81,17 +81,17 @@ def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, sch
             for n in range(num_nodes):
                 ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, local_chunk_size=num_nodes, chan=1)
 
-        XML()
+        XML(fname)
         Check()
 
-def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, schedule):
+def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, schedule, device, fname):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_gpus, True)
 
     threadblock_policy = ThreadblockPolicy.auto if schedule == 'auto' else ThreadblockPolicy.manual
     with SCCLProgram("blueconnect", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False, threadblock_policy=threadblock_policy):
+        interleaved_replication=False, threadblock_policy=threadblock_policy, device=device):
 
         local_chunk_size = num_nodes
         if schedule == 'distribute':
@@ -162,7 +162,7 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
                 for offset in range(num_nodes):
                     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset,  chunk_stride=num_nodes)
 
-        XML()
+        XML(fname)
         Check()
 
 # https://arxiv.org/pdf/1807.11205.pdf
@@ -195,6 +195,7 @@ def jia_allreduce(num_local_gpus, num_nodes, instances, protocol):
             for g in range(1, num_local_gpus):
                 c.copy(num_local_gpus*n+g, Buffer.input, 0)
 
+        XML()
         Check()
 
 parser = argparse.ArgumentParser()
@@ -204,10 +205,13 @@ parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--version',type=str, default='v1', choices=['v1', 'v2'], help='v1=count 1 v2 = count2')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
 parser.add_argument('--schedule', type=str, default='const', choices=['distribute', 'const', 'auto'], help='Scheduling')
-
+parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
+parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
+device = get_device(args.device)
+
 if args.version == 'v1':
-    blueconnect_allreduce_v1(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule)
+    blueconnect_allreduce_v1(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule, device, args.output)
 elif args.version == 'v2':
-    blueconnect_allreduce_v2(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule)
+    blueconnect_allreduce_v2(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule, device, args.output)

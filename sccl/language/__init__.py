@@ -49,13 +49,6 @@ class SCCLProgram:
         # self.chunk_dag = ChunkDAG()
         self.buffers = collective.init_buffers()
         self.instr_dag = InstructionDAG(self.num_ranks, self.buffers, self.protocol)
-        # TODO: Moved Instruction DAG initialization
-        # for r in range(self.num_ranks):
-        #     for index, chunk in enumerate(self.buffers[r][Buffer.input]):
-        #         buffer, index = self.collective.get_buffer_index(r, Buffer.input, index)
-                # self.chunk_dag.init_chunk(chunk, ref)
-                # ref = self.get_ref(r, buffer, index, 1)
-                # self.instr_dag.add_start(ref)
         self.trace = []
 
     def __enter__(self):

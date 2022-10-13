@@ -22,14 +22,14 @@ def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_
             c = chunk(((step+ch) % size)*rank_step + rank_offset, Buffer.output, index, local_chunk_size)
             c = c.copy(((step+1+ch) % size)*rank_step + rank_offset, Buffer.output, index, sendtb=sendtb(index), recvtb=recvtb(index), ch=chan(index))
 
-def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra_ch):
+def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra_ch, device, fname):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     inplace = False
     collective = AllGather(num_gpus, 1, inplace)
 
     with SCCLProgram(f"hierarchical_allgather_{num_nodes}nodes_{intra_ch}ch_{instances}in", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=True):
+        interleaved_replication=True, device=device):
 
         # Cross node All-gather 
         # Each (n, g) gpu N chunks at [g, g+G, g+G*2, ... g+G*(N-1)]
@@ -51,7 +51,7 @@ def hierarchical_allgather(num_local_gpus, num_nodes, instances, protocol, intra
                     , sendtb=alternate(intra_ch, offset*intra_ch), recvtb=alternate(intra_ch, offset*intra_ch)
                     )
 
-        XML()
+        XML(fname)
         Check()
 
 parser = argparse.ArgumentParser()
@@ -60,8 +60,11 @@ parser.add_argument('num_nodes', type=int, help='number of nodes')
 parser.add_argument('channels', type=int, help='number of channels per intra_node ring')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
-
+parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
+parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
-hierarchical_allgather(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.channels)
+device = get_device(args.device)
+
+hierarchical_allgather(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.channels, device, args.output)
 
