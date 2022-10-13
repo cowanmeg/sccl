@@ -49,9 +49,13 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
         sender_ok = send == -1 or tb_s == send
         receiver_ok = recv == -1 or tb_r == recv
         channel_ok = channel == tb_c
+        local = send == -1 and recv == -1
+        tb_local = tb_s == -1 and tb_r == -1
 
         # For correctness - if one of the peer's channels is already allocated we must use it.
-        if channel_ok and ((tb_s == send and send != -1) or (tb_r == recv and recv != -1)):
+        if channel_ok and sender_ok and receiver_ok and not local:
+            return [tbid]
+        elif channel_ok and tb_local and local:
             return [tbid]
         # TODO: Uncomment out if copies should be dispersed.
         # if sender_ok and receiver_ok and channel_ok and (send != -1 or recv != -1):
