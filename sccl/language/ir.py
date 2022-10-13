@@ -6,7 +6,7 @@ from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
 from collections import defaultdict
-
+from sccl.language.device import *
 
 @dataclass
 class Program:
@@ -219,12 +219,13 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
-def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False, fname=None):
+def ir_to_xml(program: Program, device: Device, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False, 
+    fname=None):
     # Figure out sizes of buffers based on usage and max threadblocks
     buffer_sizes = defaultdict(lambda: 0)
-    max_threadblocks = 0
+    nthreadblocks = 0
     for gpu in program.gpus:
-        max_threadblocks = max(max_threadblocks, len(gpu.threadblocks))
+        nthreadblocks = max(nthreadblocks, len(gpu.threadblocks))
         for tb in gpu.threadblocks:
             for op in tb.ops:
                 if op.inst in _local_src_insts:
@@ -341,7 +342,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     algo_elem.set('coll', program.collective)
     algo_elem.set('inplace', str(1 if program.inplace else 0))
     algo_elem.set('maxcount', str(program.maxcount))
-    algo_elem.set('nthreadblocks', str(max_threadblocks))
+    algo_elem.set('nthreadblocks', str(nthreadblocks))
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))
@@ -404,6 +405,13 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     op_elem.set('hasdep', '1')
                 elif old_format:
                     op_elem.set('hasdep', '0')
+
+
+    # Check if XMLs are valid for current constraints
+    if nchannels > device.nchannels:
+        print(f"ERROR: Program uses {nchannels} channels and device supports up to {device.nchannels}")
+    if nthreadblocks > device.npus:
+        print(f"ERROR: Program uses {nthreadblocks} threadblocks and device supports up to {device.npus}")
 
     if pretty_print:
         ET.indent(algo_elem, space='  ')

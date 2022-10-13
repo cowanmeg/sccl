@@ -12,6 +12,7 @@ from sccl.language.chunk import *
 from sccl.language.buffer import *
 from sccl.language.rank_dag import *
 from sccl.language.schedule import *
+from sccl.language.device import *
 import sccl.collectives as collectives
 # from sccl.language.visualize import *
 
@@ -26,7 +27,8 @@ def _curr():
 class SCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True, dependence_nop=False, DAG_preprocess_func=None):
+            instr_fusion=True, check_xml=True, dependence_nop=False, DAG_preprocess_func=None,
+            device=None):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -39,6 +41,7 @@ class SCCLProgram:
         self.check_xml = check_xml
         self.dependence_nop = dependence_nop
         self.DAG_preprocess_func = DAG_preprocess_func
+        self.device = Generic if device is None else device
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -292,7 +295,7 @@ class SCCLProgram:
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, self.get_maxcount(), gpu_prgms)  
 
     def generate_xml(self, fname):
-        ir_to_xml(self.lower(), fname=fname, dependence_nop=self.dependence_nop)
+        ir_to_xml(self.lower(), self.device, fname=fname, dependence_nop=self.dependence_nop)
     
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)

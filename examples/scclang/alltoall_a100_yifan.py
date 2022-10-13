@@ -5,12 +5,12 @@ from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol, device, fname):
     num_ranks = num_nodes * gpus_per_node
     topology = fully_connected(num_ranks)
-    collective = AllToAll(num_ranks, 1, inplace=False)
+    collective = AllToAll(num_ranks, instances, inplace=False)
         
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, protocol=protocol):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, protocol=protocol, device=device):
         for n1 in range(num_nodes):
             for r in range(1,num_nodes):
                 n2 = (n1 + r) % num_nodes
@@ -43,7 +43,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, protocol):
                 c = chunk(rank, Buffer.input, index)
                 c.copy(c.get_dst_rank(), Buffer.output, c.get_dst_index())
 
-        XML() # Prints the XML
+        XML(fname)
         Check()
 
 
@@ -52,7 +52,16 @@ parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help ='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
+parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
+parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
+if args.device == 'V100':
+    device = V100
+elif args.device == 'A100':
+    device = A100
+else:
+    device = Generic
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.protocol)
+
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.protocol, device, args.output)
