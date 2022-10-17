@@ -32,10 +32,10 @@ def mpirun_nccl(collective, gpus, txt, lower='512B', upper='4GB'):
 def allreduce_rexchange():
     assert nodes == 2, f"Rexchange hierarchical allreduce only works for 2 nodes"
     def run(instances, protocol, schedule, lower='512B'):
-        xml = f"{home}/xmls/allreduce/rexchange_{instances}_{protocol}_{schedule}.xml"
+        xml = f"{home}/xmls/rexchange_{instances}_{protocol}_{schedule}.xml"
         txt = f"{home}/{machine}/allreduce_{nodes}nodes/rexchange_{instances}_{protocol}_{schedule}.txt"
         print(f'Generating {xml} {txt}')
-        cmd = f'python3 sccl/examples/scclang/allreduce_a100_hierarchical.py {gpus_per_node} {nodes} {instances} --protocol={protocol} --schedule={schedule} > {xml}'
+        cmd = f'python3 sccl/examples/scclang/allreduce_a100_hierarchical.py {gpus_per_node} {nodes} {instances} --protocol={protocol} --schedule={schedule} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('all_reduce', gpus, xml, txt, lower)
@@ -46,11 +46,11 @@ def allreduce_rexchange():
 
 def allreduce_hierarchical():
     def run(instances, protocol, version, schedule, lower='512B'):
-        xml = f"{home}/xmls/allreduce/hierarchical_{instances}_{protocol}_{version}_{schedule}.xml"
+        xml = f"{home}/xmls/hierarchical_{instances}_{protocol}_{version}_{schedule}.xml"
         txt = f"{home}/{machine}/allreduce_{nodes}nodes/hierarchical_{instances}_{protocol}_{version}_{schedule}.txt"
         print(f'Generating {xml} {txt}')
         cmd = f'python3 sccl/examples/scclang/hierarchical_allreduce_blueconnect.py {gpus_per_node} {nodes} '\
-            f'{instances} --protocol={protocol} --version={version} --schedule={schedule} > {xml}'
+            f'{instances} --protocol={protocol} --version={version} --schedule={schedule} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('all_reduce', gpus, xml, txt, lower)
@@ -58,10 +58,10 @@ def allreduce_hierarchical():
     run(1, 'LL', 'v1', 'auto')
     run(1, 'LL128', 'v1', 'auto')
 
-    # run(4, 'Simple', 'v1', 'manual')
-    run(4, 'LL128', 'v1', 'manual')
-    run(2, 'Simple', 'v1', 'manual')
-    run(2, 'LL128', 'v1', 'manual')
+    # run(4, 'Simple', 'v1', 'const')
+    run(4, 'LL128', 'v1', 'const')
+    run(2, 'Simple', 'v1', 'const')
+    run(2, 'LL128', 'v1', 'const')
 
     # for version in ['v1']:
     #     for protocol in ['Simple', 'LL', 'LL128']:
@@ -74,11 +74,11 @@ def allreduce_hierarchical():
 
 def allgather_hierarchical():
     def run(instances, protocol, channels, lower='512B'):
-        xml = f"{home}/xmls/allgather/hierarchical_{instances}_{protocol}_{channels}.xml"
+        xml = f"{home}/xmls/hierarchical_{instances}_{protocol}_{channels}.xml"
         txt = f"{home}/{machine}/allgather_{nodes}nodes/hierarchical_{instances}_{protocol}_{channels}.txt"
         print(f'Generating {xml} {txt}')
         cmd = f'python3 sccl/examples/scclang/hierarchical_allgather.py {gpus_per_node} {nodes} '\
-            f'{channels} {instances} > {xml}'
+            f'{channels} {instances} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('all_reduce', gpus, xml, txt, lower)
@@ -87,10 +87,10 @@ def allgather_hierarchical():
 
 def alltoall_2d():
     def run(instances, protocol, lower='512B'):
-        xml = f"{home}/xmls/alltoall/alltoall_2d_{nodes}_{instances}_{protocol}.xml"
+        xml = f"{home}/xmls/alltoall_2d_{nodes}_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_2d_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
-        cmd = f'python3 sccl/examples/scclang/alltoall_a100_yifan.py {nodes} {gpus_per_node} {instances} --protocol={protocol} > {xml}'
+        cmd = f'python3 sccl/examples/scclang/alltoall_a100_yifan.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower)
@@ -100,10 +100,10 @@ def alltoall_2d():
 
 def alltoall_8kp1():
     def run(instances, protocol, lower='512B'):
-        xml = f"{home}/xmls/alltoall/alltoall_8kp1_{nodes}_{instances}_{protocol}.xml"
+        xml = f"{home}/xmls/alltoall_8kp1_{nodes}_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_8kp1_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
-        cmd = f'python3 sccl/examples/scclang/alltoall_a100n.py {nodes} {gpus_per_node} {instances} --protocol={protocol} > {xml}'
+        cmd = f'python3 sccl/examples/scclang/alltoall_a100n.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower)
@@ -113,10 +113,10 @@ def alltoall_8kp1():
 
 def alltonext():
     def run(instances, protocol, lower='512B'):
-        xml = f"{home}/xmls/alltonext/forward_{nodes}_{instances}_{protocol}_half.xml"
+        xml = f"{home}/xmls/forward_{nodes}_{instances}_{protocol}_half.xml"
         txt = f"{home}/{machine}/alltonext_{nodes}nodes/forward_{nodes}_{instances}_{protocol}_half.txt"
         print(f'Generating {xml} {txt}')
-        cmd = f'python3 sccl/examples/scclang/alltonext_forward.py {gpus_per_node} {nodes} {instances} --version=half > {xml}'
+        cmd = f'python3 sccl/examples/scclang/alltonext_forward.py {gpus_per_node} {nodes} {instances} --version=half --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('alltonext', gpus, xml, txt, lower)
@@ -158,27 +158,23 @@ if __name__ == '__main__':
     check_create(f'{machine}/alltonext_{nodes}nodes')
     check_create(f'{machine}/alltoall_{nodes}nodes')
     check_create(f'xmls')
-    check_create(f'xmls/allreduce')
-    check_create(f'xmls/alltonext')
-    check_create(f'xmls/alltoall')
 
     #NCCL Baselines
     allreduce_nccl()
     allgather_nccl()
     alltoall_nccl()
+    alltonext_nccl()
      
-    # AllToAll
     alltoall_2d()
     alltoall_8kp1()
     alltoall_cuda_2d()
 
-    # AllReduce
-    allreduce_rexchange()
     allreduce_hierarchical()
 
-    # AllToNext
     alltonext()
-    alltonext_nccl()
+
+    allgather_hierarchical()
+    
 
 
     

@@ -2,39 +2,14 @@
 # Licensed under the MIT License.
 
 import argparse
-from concurrent.futures import thread
 
 from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllReduce
+from ring import *
 
 # Blue Connect style AllReduce https://proceedings.mlsys.org/paper/2019/file/9b8619251a19057cff70779273e95aa6-Paper.pdf
 # Assumes only two-level switches
-
-def const_func(x):
-    def f(chunk): return x
-    return f
-
-def alternate(x, offset=0):
-    def f(chunk): return chunk % x + offset
-    return f
-
-
-def ring_reduce_scatter(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, sendtbf=const_func(-1), recvtbf=const_func(-1), chanf=const_func(-1)):
-    for ch in range(0, size):
-        index = ch * chunk_stride * local_chunk_size + chunk_offset
-        for step in range(0, size-1):
-            other = chunk(((step+1+ch) % size)*rank_step +rank_offset, Buffer.input, index, local_chunk_size)
-            c = chunk(((step+2+ch) % size)*rank_step+rank_offset, Buffer.input, index, local_chunk_size)
-            c.reduce(other, sendtb=sendtbf(index), recvtb=recvtbf(index), ch=chanf(index))
-
-def ring_all_gather(size, rank_offset=0, rank_step=1, local_chunk_size=1, chunk_offset=0, chunk_stride=1, sendtbf=const_func(-1), recvtbf=const_func(-1), chanf=const_func(-1)):
-    for ch in range(0, size):
-        index = ch * chunk_stride * local_chunk_size + chunk_offset
-        for step in range(0, size-1):
-            c = chunk(((step+ch) % size)*rank_step + rank_offset, Buffer.input, index, local_chunk_size)
-            c.copy(((step+1+ch) % size)*rank_step + rank_offset, Buffer.input, index, sendtb=sendtbf(index), recvtb=recvtbf(index), ch=chanf(index))
-
 
 def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, schedule, device, fname):
     num_gpus = num_local_gpus * num_nodes
@@ -188,7 +163,7 @@ def jia_allreduce(num_local_gpus, num_nodes, instances, protocol):
         # Cross node All-gather
         ring_all_gather(num_nodes, rank_step=num_local_gpus)
 
-        # # Broadcast within each node
+        # Broadcast within each node
         for n in range(num_nodes):
             # chunk on the master learner
             c = chunk(num_local_gpus*n, Buffer.input, 0, local_chunk_size)

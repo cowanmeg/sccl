@@ -42,7 +42,7 @@ class Pipeline(Collective):
                     correct = False
         return correct
 
-def pipeline_half(num_local_gpus, num_nodes, instances):
+def pipeline_half(num_local_gpus, num_nodes, instances, protocol, device, fname):
     chunks = num_local_gpus // 2
     total_chunks_per_loop = chunks
     remote_bw = 1
@@ -53,7 +53,7 @@ def pipeline_half(num_local_gpus, num_nodes, instances):
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("alltonext-forward", topology, collective, instances):
+    with SCCLProgram("alltonext-forward", topology, collective, instances, protocol=protocol, device=device):
 
         for n in range(num_nodes):
             for g in range(num_local_gpus):
@@ -86,10 +86,10 @@ def pipeline_half(num_local_gpus, num_nodes, instances):
                     c.copy(r+1, Buffer.output, 0)
         
         Check()
-        XML()
+        XML(fname)
 
 
-def pipeline(num_local_gpus, num_nodes, instances):
+def pipeline(num_local_gpus, num_nodes, instances, protocol, device, fname):
     chunks = num_local_gpus
     total_chunks_per_loop = chunks
     remote_bw = 1
@@ -100,7 +100,7 @@ def pipeline(num_local_gpus, num_nodes, instances):
     def rank(node, local_rank):
         return node * num_local_gpus + local_rank
     
-    with SCCLProgram("alltonext-forward", topology, collective, instances):
+    with SCCLProgram("alltonext-forward", topology, collective, instances, protocol=protocol, device=device):
 
         for n in range(num_nodes):
             for g in range(num_local_gpus):
@@ -133,7 +133,7 @@ def pipeline(num_local_gpus, num_nodes, instances):
                     c.copy(r+1, Buffer.output, 0, ch=g%2)
         
         Check()
-        XML()
+        XML(fname)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
@@ -141,10 +141,14 @@ if __name__ == '__main__':
     parser.add_argument('num_nodes', type=int, help ='number of nodes')
     parser.add_argument('instances', type=int, help ='number of instances')
     parser.add_argument('--version', type=str, default='half', choices=['half', 'full'], help='Use half if the number of IBs to GPUs is one to two')
-
+    parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
+    parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
+    parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
 
     args = parser.parse_args()
+    device = get_device(args.device)
+
     if args.version == 'full':
-        pipeline(args.num_local_gpus, args.num_nodes, args.instances)
+        pipeline(args.num_local_gpus, args.num_nodes, args.instances, args.protocol, device, args.output)
     elif args.version == 'half':
-        pipeline_half(args.num_local_gpus, args.num_nodes, args.instances)
+        pipeline_half(args.num_local_gpus, args.num_nodes, args.instances, args.protocol, device, args.output)
