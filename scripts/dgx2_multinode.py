@@ -1,4 +1,5 @@
 import argparse
+from distutils.log import debug
 import os
 from scripts.common import *
 
@@ -11,8 +12,9 @@ gpus_per_node = 16
 # Runs through our multi-node algorithms for DGX2
 
 def mpirun(collective, gpus, xml, txt, lower='512B', upper='4GB'):
-    # for n in range(1, nodes):
-    #     os.system(f'scp {xml} worker-{n}:{xml}')
+    if not debug:
+        for n in range(1, nodes):
+            os.system(f'scp {xml} worker-{n}:{xml}')
     cmd = f'mpirun --tag-output --allow-run-as-root -np {gpus} --bind-to numa -hostfile {home}/hostfile ' \
         f'-x NCCL_ALGO=MSCCL,RING,TREE -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
         f'-mca pml ob1 -mca btl ^openib -mca btl_tcp_if_include enp134s0f1 -mca coll_hcoll_enable 0 '\
@@ -24,10 +26,15 @@ def mpirun(collective, gpus, xml, txt, lower='512B', upper='4GB'):
         f'-x MSCCL_XML_FILES={xml} {home}/nccl-tests/build/{collective}_perf ' \
         f'-g 1 -n 50 -w 25 -f 2 -c 1 -z 0 -b {lower} -e {upper} > {txt}'
     print(f'Running {cmd}')
-    # os.system(cmd)
+
+    if not debug:
+        if xml is not None and valid_resources(xml, SMS, CHANNELS):
+            os.system(cmd)
+        else:
+            print('Not enough resources to run')
 
 def mpirun_nccl(collective, gpus, txt, lower='512B', upper='4GB'):
-    mpirun(collective, gpus, 'fake.xml', txt, lower, upper)
+    mpirun(collective, gpus, None, txt, lower, upper)
 
 def allreduce_rexchange():
     assert nodes == 2, f"Rexchange hierarchical allreduce only works for 2 nodes"
@@ -55,8 +62,6 @@ def allreduce_hierarchical():
         os.system(cmd)
         mpirun('all_reduce', gpus, xml, txt, lower)
 
-    run(1, 'LL', 'v1', 'auto')
-    run(1, 'LL128', 'v1', 'auto')
 
     # run(4, 'Simple', 'v1', 'const')
     run(4, 'LL128', 'v1', 'const')
@@ -83,7 +88,10 @@ def allgather_hierarchical():
         os.system(cmd)
         mpirun('all_reduce', gpus, xml, txt, lower)
 
-    run(1, 'LL', 1, 1)
+    for instances in range(1, 4):
+        for channels in range(1, 4):
+            for protocol in ['Simple', 'LL128', 'LL']:
+                run(instances, protocol, channels)
 
 def alltoall_2d():
     def run(instances, protocol, lower='512B'):
@@ -94,6 +102,7 @@ def alltoall_2d():
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower)
+
     for instances in [1]:
         for protocol in ['Simple', 'LL', 'LL128']:
             run(instances, protocol)
@@ -103,10 +112,11 @@ def alltoall_8kp1():
         xml = f"{home}/xmls/alltoall_8kp1_{nodes}_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_8kp1_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
-        cmd = f'python3 sccl/examples/scclang/alltoall_a100n.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
+        cmd = f'python3 sccl/examples/scclang/alltoall_a100.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower)
+
     for instances in [1]:
         for protocol in ['Simple', 'LL', 'LL128']:
             run(instances, protocol)
@@ -120,9 +130,11 @@ def alltonext():
         print(f'Running {cmd}')
         os.system(cmd)
         mpirun('alltonext', gpus, xml, txt, lower)
-    run(2, 'Simple')
-    run(4, 'Simple')
-    # run(8, 'Simple')
+
+    for instances in [1, 2, 4]:
+        for protocol in ['Simple', 'LL', 'LL128']:
+            run(instances, protocol)
+
 
 
 def allgather_nccl():
@@ -148,8 +160,10 @@ def alltonext_nccl():
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
     parser.add_argument('nodes', type=int, help ='Number of nodes to run algorithms on')
+    parser.add_argument('--debug', default=False, action='store_true', help ='Generate XMLs only')
     args = parser.parse_args()
-    global nodes, gpus
+    global nodes, gpus, debug
+    debug = args.debug
     nodes = args.nodes
     gpus = gpus_per_node * nodes
 

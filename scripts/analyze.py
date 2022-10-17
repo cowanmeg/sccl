@@ -49,7 +49,5 @@ if __name__ == '__main__':
     parser.set_defaults(inplace=True)
     args = parser.parse_args()
     find_best(args.directory, args.inplace)
-    # find_best('alltoall', False)
-    # find_best('allreduce', True)
-    # find_best('allgather', True)
+
 

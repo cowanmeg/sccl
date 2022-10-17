@@ -12,7 +12,7 @@ from sccl.language import *
 from sccl.topologies import *
 from sccl.language.collectives import AllToAll
 
-def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections, device, fname):
+def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections, protocol, device, fname):
     num_ranks = num_nodes * gpus_per_node
 
     # (node, local gpu) to rank
@@ -41,7 +41,7 @@ def alltoall_hierarchical(num_nodes, gpus_per_node, instances, ib_connections, d
     topology = fully_connected(num_ranks)
     collective = AllToAll(num_ranks, instances, inplace=False)
     
-    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, device=device):
+    with SCCLProgram("hierarchical_all_to_all", topology, collective, instances, protocol=protocol, device=device):
         ib_chunks = {} # Keeps track of chunks going over IB buffer buffer name -> chunk
 
         # Local Gathers
@@ -127,6 +127,7 @@ parser.add_argument('num_nodes', type=int, help ='number of nodes')
 parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--ib_connections', type=int, default=-1, help='Number of connections used for each IB copy. Default: number of instances')
+parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
 parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
 parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
@@ -136,4 +137,4 @@ device = get_device(args.device)
 if args.ib_connections == -1:
     args.ib_connections = args.instances
 
-alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.ib_connections, device, args.output)
+alltoall_hierarchical(args.num_nodes, args.gpus_per_node, args.instances, args.ib_connections, args.protocol, device, args.output)
