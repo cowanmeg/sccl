@@ -1,5 +1,4 @@
 import argparse
-from distutils.log import debug
 import os
 from scripts.common import *
 
@@ -161,7 +160,7 @@ if __name__ == '__main__':
     parser.add_argument('--debug', default=False, action='store_true', help ='Generate XMLs only')
     args = parser.parse_args()
     global nodes, gpus, debug
-    debug = args.debug
+    debug = bool(args.debug)
     nodes = args.nodes
     gpus = gpus_per_node * nodes
 

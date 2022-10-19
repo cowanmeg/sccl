@@ -16,6 +16,8 @@ from sccl.language.device import *
 import sccl.collectives as collectives
 # from sccl.language.visualize import *
 
+max_count = 128
+
 _parallel_id = 0
 _current_program = None
 def _curr():
@@ -395,8 +397,20 @@ class Ref(ChunkRef):
         # overwritten_chunks = self.prog.get_chunks(dst, buffer, index, self.size)
         
         self.prog.apply_send(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
-        chunkop = ChunkOp(ChunkInstruction.copy, self, dst_chunkref, sendtb, recvtb, ch)
-        self.prog.trace.append(chunkop)
+        # Break up the copy to fit into the max_count
+        # TODO: Apply to reduce
+        if self.size > max_count:
+            count = 0
+            while count < self.size:
+                c = min(max_count, self.size-count)
+                srcref = self.prog.get_ref(self.rank, self.buffer, self.index + count, c)
+                dstref = self.prog.get_ref(dst, buffer, index + count, c)
+                chunkop = ChunkOp(ChunkInstruction.copy, srcref, dstref, sendtb, recvtb, ch)
+                self.prog.trace.append(chunkop)
+                count += c
+        else:
+            chunkop = ChunkOp(ChunkInstruction.copy, self, dst_chunkref, sendtb, recvtb, ch)
+            self.prog.trace.append(chunkop)
 
         # self.prog.chunk_dag.add_send(chunks, overwritten_chunks, self, dst_chunkref, sendtb, recvtb, ch)
         # sender = self.rank
