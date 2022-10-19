@@ -9,14 +9,24 @@ SMS = 80
 machine = 'dgx2'
 gpus_per_node = 16
 
+# NCCL 2.12
+default_lower = '512'
+LL_upper = '512M'
+default_upper = '2G'
+
+# NCCL 2.8.4 uses different ranges
+# default_lower = '512B'
+# LL_upper = '512MB'
+# default_upper = '2GB'
+
 # Runs through our multi-node algorithms for DGX2
 
-def mpirun(collective, gpus, xml, txt, lower='512', upper='2G'):
+def mpirun(collective, gpus, xml, txt, lower=default_lower, upper=default_upper, algo='MSCCL,RING,TREE'):
     # if not debug:
     #     for n in range(1, nodes):
     #         os.system(f'scp {xml} worker-{n}:{xml}')
     cmd = f'mpirun --tag-output --allow-run-as-root -np {gpus} --bind-to numa -hostfile ~/hostfile ' \
-        f'-x NCCL_ALGO=MSCCL,RING,TREE -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
+        f'-x NCCL_ALGO={algo} -x LD_LIBRARY_PATH={home}/msccl/build/lib/ ' \
         f'-mca pml ob1 -mca btl ^openib -mca btl_tcp_if_include enp134s0f1 -mca coll_hcoll_enable 0 '\
         f'-mca plm_rsh_no_tree_spawn 1 -mca plm_rsh_num_concurrent 8192 -x PATH  '\
         f'-x NCCL_UCX_TLS=rc_x,cuda_copy,cuda_ipc -x NCCL_UCX_RNDV_THRESH=0 -x NCCL_UCX_RNDV_SCHEME=get_zcopy '\
@@ -33,8 +43,8 @@ def mpirun(collective, gpus, xml, txt, lower='512', upper='2G'):
         else:
             print('Not enough resources to run')
 
-def mpirun_nccl(collective, gpus, txt, lower='512', upper='2G'):
-    mpirun(collective, gpus, None, txt, lower, upper)
+def mpirun_nccl(collective, gpus, txt, lower=default_lower, upper=default_upper, algo='RING,TREE'):
+    mpirun(collective, gpus, None, txt, lower, upper, algo=algo)
 
 def allreduce_rexchange():
     assert nodes == 2, f"Rexchange hierarchical allreduce only works for 2 nodes"
@@ -52,7 +62,7 @@ def allreduce_rexchange():
     run(1, 'LL', 'auto')
 
 def allreduce_hierarchical():
-    def run(instances, protocol, version, schedule, lower='512'):
+    def run(instances, protocol, version, schedule, lower=default_lower, upper=default_upper):
         xml = f"{home}/xmls/allreduce_hierarchical_{instances}_{protocol}_{version}_{schedule}.xml"
         txt = f"{home}/{machine}/allreduce_{nodes}nodes/hierarchical_{instances}_{protocol}_{version}_{schedule}.txt"
         print(f'Generating {xml} {txt}')
@@ -60,7 +70,7 @@ def allreduce_hierarchical():
             f'{instances} --protocol={protocol} --version={version} --schedule={schedule} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
-        mpirun('all_reduce', gpus, xml, txt, lower)
+        mpirun('all_reduce', gpus, xml, txt, lower, upper)
 
     # run(4, 'Simple', 'v1', 'const')
     # run(4, 'LL128', 'v1', 'const')
@@ -72,10 +82,14 @@ def allreduce_hierarchical():
             for instances in [1, 2, 4]:
                 chunks = gpus * instances
                 lower = chunks * 4
+                if protocol == 'LL':
+                    upper = LL_upper
+                else:
+                    upper = default_upper
                 run(instances, protocol, version, 'const')
 
 def allgather_hierarchical():
-    def run(instances, protocol, channels, lower='512'):
+    def run(instances, protocol, channels, lower=default_lower, upper=default_upper):
         xml = f"{home}/xmls/allgather_hierarchical_{instances}_{protocol}_{channels}.xml"
         txt = f"{home}/{machine}/allgather_{nodes}nodes/hierarchical_{instances}_{protocol}_{channels}.txt"
         print(f'Generating {xml} {txt}')
@@ -83,43 +97,55 @@ def allgather_hierarchical():
             f'{channels} {instances} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
-        mpirun('all_reduce', gpus, xml, txt, lower)
+        mpirun('all_reduce', gpus, xml, txt, lower, upper)
 
-    for instances in range(1, 4):
-        for channels in range(1, 4):
+    for instances in range[1, 2, 4]:
+        for channels in range[1, 2, 4]:
             for protocol in ['Simple', 'LL128', 'LL']:
-                run(instances, protocol, channels)
+                if protocol == 'LL':
+                    upper = LL_upper
+                else:
+                    upper = default_upper
+                run(instances, protocol, channels, upper=upper)
 
 def alltoall_2d():
-    def run(instances, protocol, lower='512'):
+    def run(instances, protocol, lower=default_lower, upper=default_upper):
         xml = f"{home}/xmls/alltoall_2d_{nodes}_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_2d_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
         cmd = f'python3 sccl/examples/scclang/alltoall_a100_yifan.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
-        mpirun('alltoall', gpus, xml, txt, lower)
+        mpirun('alltoall', gpus, xml, txt, lower, upper)
 
     for instances in [1]:
-        for protocol in ['Simple', 'LL', 'LL128']:
-            run(instances, protocol)
+        for protocol in ['Simple', 'LL128', 'LL']:
+            if protocol == 'LL':
+                    upper = LL_upper
+                else:
+                    upper = default_upper
+            run(instances, protocol, upper=upper)
 
 def alltoall_8kp1():
-    def run(instances, protocol, lower='512'):
+    def run(instances, protocol, lower=default_lower, upper=default_upper):
         xml = f"{home}/xmls/alltoall_8kp1_{nodes}_{instances}_{protocol}.xml"
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_8kp1_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
         cmd = f'python3 sccl/examples/scclang/alltoall_a100.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
         print(f'Running {cmd}')
         os.system(cmd)
-        mpirun('alltoall', gpus, xml, txt, lower)
+        mpirun('alltoall', gpus, xml, txt, lower, upper)
 
     for instances in [1]:
-        for protocol in ['Simple', 'LL', 'LL128']:
+        for protocol in ['Simple', 'LL128', 'LL']:
+            if protocol == 'LL':
+                    upper = LL_upper
+                else:
+                    upper = default_upper
             run(instances, protocol)
 
 def alltonext():
-    def run(instances, protocol, lower='512'):
+    def run(instances, protocol, lower=default_lower):
         xml = f"{home}/xmls/forward_{nodes}_{instances}_{protocol}_half.xml"
         txt = f"{home}/{machine}/alltonext_{nodes}nodes/forward_{nodes}_{instances}_{protocol}_half.txt"
         print(f'Generating {xml} {txt}')
@@ -144,7 +170,7 @@ def allreduce_nccl():
 
 def alltoall_cuda_2d():
     print("Run CUDA Two-Step AllToAll")
-    mpirun('alltoall', gpus, '2D', f'{home}/{machine}/alltoall_{nodes}nodes/nccl_2d.txt')
+    mpirun('alltoall', gpus, None, f'{home}/{machine}/alltoall_{nodes}nodes/nccl_2d.txt', algo='2D')
 
 def alltoall_nccl():
     print("Run NCCL AllToAll")

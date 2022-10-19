@@ -44,10 +44,13 @@ def parse(filename, output):
 
     with open(output, 'w') as f:
         if len(results) > 0:
+            print(len(results[0]), results[0])
             if len(results[0]) == 11:
                 f.write("size,count,type,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
             elif len(results[0]) == 12:
-                f.write("size,count,type,op,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
+                f.write("size,count,type,redop,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
+            elif len(results[0]) == 13:
+                f.write("size,count,type,redop,root,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
             writer = csv.writer(f)
             writer.writerows(results)
 
