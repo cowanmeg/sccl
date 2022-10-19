@@ -343,7 +343,7 @@ def ir_to_xml(program: Program, device: Device, old_format=True, use_scratch=Tru
     algo_elem.set('inplace', str(1 if program.inplace else 0))
     algo_elem.set('maxcount', str(program.maxcount))
     algo_elem.set('nthreadblocks', str(nthreadblocks))
-    algo_elem.set('maxbytes', str(2147483648)) # TODO: Might conflict with autosynth
+    algo_elem.set('maxBytes', str(2147483648)) # TODO: Might conflict with autosynth
     for gpu in program.gpus:
         gpu_elem = ET.SubElement(algo_elem, 'gpu')
         gpu_elem.set('id', str(gpu.rank))
