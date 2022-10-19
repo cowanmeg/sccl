@@ -4,7 +4,7 @@
 from dataclasses import dataclass
 from enum import Enum
 import heapq
-
+import time
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
 
@@ -122,7 +122,7 @@ def priority(op):
 # (2): Instruction dependencies are respected
 def topo_sort_instrs(instr_dag):
     insert_connection_dependencies(instr_dag)
-
+    start = time.time()
     visited = set()
     ops = []
     ordered = []
@@ -151,6 +151,8 @@ def topo_sort_instrs(instr_dag):
 
     instr_dag.ordered_instrs = ordered
     assert instr_dag.num_instrs == len(visited), f'Compilation error: TB assignment {instr_dag.num_instrs} {len(visited)}'
+    end = time.time()
+    print(f'Topological Sort: {end-start}')
     return ordered
 
 # TODO: Merge flow channel assignment with fusion
@@ -184,6 +186,7 @@ def channel_assignment(instr_dag):
             rank2recvch[receiver][sender].remove(ch)
 
     def assign_flow_channel(chain):
+        start = time.time()
         flow = chain.connection_set()
         user_ch = chain.ops[0].channel
         ch = is_matching_flow(flow)
@@ -207,6 +210,8 @@ def channel_assignment(instr_dag):
             if op.is_send():
                 reserve_channel(op.rank, op.send_peer(), ch)
             op.channel = ch
+        end = time.time()
+        print(f'Channel assignment {end-start}')
             
 
     # Assign channels to flows
@@ -223,6 +228,7 @@ def channel_assignment(instr_dag):
 # 1. Remote buffer slots aren't blocking
 # 2. Chunks sent over a channel are received in the same order
 def insert_connection_dependencies(instr_dag):
+    start = time.time()
     slots = 2 if instr_dag.protocol == 'Simple' else 8
     connections = defaultdict(list) # A connection is uniquely identified by (send_peer, recv_peer, channel)
 
@@ -254,6 +260,8 @@ def insert_connection_dependencies(instr_dag):
         if op.inst == Instruction.start:
             heapq.heappush(frontier, (priority(op), op))     
     iterate(frontier)
+    end = time.time()
+    print(f'Insert connection dependencies {end-start}')
     # print("Number of ops visited during deps", len(visited))
 
 

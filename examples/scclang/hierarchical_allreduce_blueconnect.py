@@ -103,19 +103,19 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
             # Cross node Reduce-Scatter
             for g in range(num_local_gpus):
                 ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                chanf=const_func(g%2), sendtbf=const_func(g+num_nodes), recvtbf=const_func(g+num_nodes))
+                chanf=const_func(g%2), sendtbf=const_func(g+num_nodes*2), recvtbf=const_func(g+num_nodes*2))
 
             # Cross node All-gather
             for g in range(num_local_gpus):
                 ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, 
-                    chanf=const_func(g%2), sendtbf=const_func(g+num_nodes), recvtbf=const_func(g+num_nodes))
+                    chanf=const_func(g%2), sendtbf=const_func(g+num_nodes*2), recvtbf=const_func(g+num_nodes*2))
 
 
             # All gather within each node
             for n in range(num_nodes):
                 for offset in range(num_nodes):
                     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, 
-                        chunk_stride=num_nodes, chanf=const_func(offset), sendtbf=const_func(offset), recvtbf=const_func(offset))
+                        chunk_stride=num_nodes, chanf=const_func(offset+num_nodes), sendtbf=const_func(offset+num_nodes), recvtbf=const_func(offset+num_nodes))
 
         else: # auto
             # Reduce Scatter within each node

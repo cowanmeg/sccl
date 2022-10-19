@@ -2,9 +2,8 @@
 # Licensed under the MIT License.
 
 from dataclasses import dataclass
-from enum import Enum
 import heapq
-import functools
+import time
 from typing import DefaultDict
 
 from sccl.language.ir import *
@@ -24,8 +23,9 @@ def remove_op(op):
 def same_tb(op1, op2):
     return op1.tb == op2.tb and op1.channel == op2.channel
 
+# TODO: Temporary until Runtime supports strided copy. Fusion with count > 1 can result in deadlocks. 
 def same_count(op1, op2):
-    return op1.cnt() == op2.cnt()
+    return op1.cnt() == 1 and op1.cnt() == op2.cnt()
 
 # A chain of fused instructions
 # send -> rrs -> rrcs -> rcs -> r 
@@ -85,6 +85,7 @@ class InstructionDAG:
         self.sends = [] # list of all sends
         self.chains = [] # list of all fused instruction chains
         self.num_instrs = 0
+        self.ordered_instrs = None
 
     # InstructionDAG helper - identifies the dependencies for a write-type operation (recv, copy, rrc, reduce)
     def _write(self, rank, buffer, index, size, op, read=False):
@@ -267,6 +268,7 @@ class InstructionDAG:
     # rrc(src, sbuf, si, ...) send(_, _, _, dst, dbuf, di)
 
     def _instr_fusion(self):
+        start = time.time()
         def dfs(send_op, flow):
             op = send_op.recv_match
             for next_op in op.next:
@@ -295,6 +297,8 @@ class InstructionDAG:
                 dfs(send, chain)
                 if chain.length() > 2:
                     self.chains.append(chain)
+        end = time.time()
+        print(f'Instr Fusion {end-start}')
 
     def lower_pt1(self, instances):
         self.lower_buffers(instances)
@@ -305,26 +309,40 @@ class InstructionDAG:
 
 
     def infer_dependencies(self):
-        for slot, ops in self.operations.items():
-            frontier = [ops]
-            visited = set()
-            while len(frontier) > 0:
-                op = frontier[0]
-                if op not in visited:
-                    visited.add(op)
-                    # Dependencies for every op is the same as the ops that are stored in prev
-                    # Filter out dependencies that are satisified by tbs executing ops sequentially
-                    # If multiple dependent ops from the same tb keep the one that happens last
-                    # Filter out dependencies between two different ranks
-                    depends = {}
-                    for dep_op in list(op.prev):
-                        if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
-                            tb = dep_op.tb
-                            if tb not in depends or dep_op.step > depends[tb].step:
-                                depends[tb] = dep_op
-                    op.depends = list(depends.values())
-                    frontier += op.next
-                frontier = frontier[1:]
+        start = time.time()
+        # for slot, ops in self.operations.items():
+        #     frontier = [ops]
+        #     visited = set()
+        #     i = 0
+        #     while i < len(frontier):
+        #         op = frontier[i]
+        #         if op not in visited:
+        #             visited.add(op)
+        #             # Dependencies for every op is the same as the ops that are stored in prev
+        #             # Filter out dependencies that are satisified by tbs executing ops sequentially
+        #             # If multiple dependent ops from the same tb keep the one that happens last
+        #             # Filter out dependencies between two different ranks
+        #             depends = {}
+        #             for dep_op in list(op.prev):
+        #                 if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
+        #                     tb = dep_op.tb
+        #                     if tb not in depends or dep_op.step > depends[tb].step:
+        #                         depends[tb] = dep_op
+        #             op.depends = list(depends.values())
+        #             frontier += op.next
+        #         i += 1
+
+        for op in self.ordered_instrs:
+            depends = {}
+            for dep_op in list(op.prev):
+                if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
+                    tb = dep_op.tb
+                    if tb not in depends or dep_op.step > depends[tb].step:
+                        depends[tb] = dep_op
+            op.depends = list(depends.values())
+
+        end = time.time()
+        print(f'Dependency analysis {end-start}')
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -366,6 +384,7 @@ class InstructionDAG:
     # Interleaved policy only supports single count sends/receives from the input/output buffer
     # (multicount ops are fine between scratch)
     def replicate(self, instances, interleaved):
+        start = time.time()
         if instances == 1:
             self.instanced_tbs = self.tbs
             self.infer_dependencies()
@@ -458,6 +477,9 @@ class InstructionDAG:
                 self.instanced_tbs[op.rank][iop.tb].ops.append(iop)
         self.convert_set_list()
         self.infer_dependencies()
+
+        end = time.time()
+        print(f'Instances {end-start}')
 
     
     def priority(self, op):
