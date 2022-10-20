@@ -134,7 +134,6 @@ class InstructionDAG:
 
     # InstructionDAG - builds the roots of the DAG
     def add_start(self, ref):
-        self.num_instrs += 1
         slot = (ref.rank, ref.buffer, ref.index)
         op = Op(Instruction.start, ref.rank, ref, ref, next=set(), prev=set())
         self.operations[slot] = op
@@ -308,7 +307,7 @@ class InstructionDAG:
         return self.lower_tbs()
 
 
-    def infer_dependencies(self):
+    def infer_dependencies(self, instances=False):
         start = time.time()
         # for slot, ops in self.operations.items():
         #     frontier = [ops]
@@ -332,15 +331,18 @@ class InstructionDAG:
         #             frontier += op.next
         #         i += 1
 
-        for op in self.ordered_instrs:
-            depends = {}
-            for dep_op in list(op.prev):
-                if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
-                    tb = dep_op.tb
-                    if tb not in depends or dep_op.step > depends[tb].step:
-                        depends[tb] = dep_op
-            op.depends = list(depends.values())
-
+        # TODO: More testing to see this is equivalent
+        tbs = self.instanced_tbs if instances else self.tbs
+        for rank_tbs in tbs:
+            for tb in rank_tbs.values():
+                for op in tb.ops:
+                    depends = {}
+                    for dep_op in list(op.prev):
+                        if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
+                            tb = dep_op.tb
+                            if tb not in depends or dep_op.step > depends[tb].step:
+                                depends[tb] = dep_op
+        #             op.depends = list(depends.values())
         end = time.time()
         print(f'Dependency analysis {end-start}')
 
@@ -475,8 +477,9 @@ class InstructionDAG:
             for i in range(instances):
                 iop = add_instance_op(op, i)
                 self.instanced_tbs[op.rank][iop.tb].ops.append(iop)
+
         self.convert_set_list()
-        self.infer_dependencies()
+        self.infer_dependencies(instances=True)
 
         end = time.time()
         print(f'Instances {end-start}')
@@ -487,16 +490,17 @@ class InstructionDAG:
         
     # Scheduling interface?
     def topo_sort_instrs(self):
+        # insert_connection_dependencies(instr_dag)
+        start = time.time()
         visited = set()
         ops = []
         ordered = []
-        for slot, op in self.operations.items():
+        for op in self.operations.values():
             if op.inst == Instruction.start:
                 visited.add(op)
                 for o in op.next:
                     if (o.inst == Instruction.send or o.inst == Instruction.copy) and all([x in visited for x in o.prev]):
                         heapq.heappush(ops, (self.priority(o), o))
-
         while len(ops) > 0:
             _, op = heapq.heappop(ops)
             if op not in visited:
@@ -510,8 +514,12 @@ class InstructionDAG:
                 # Add other operation that have dependencies satisfied
                 for o in op.next:
                     if all([x in visited for x in o.prev]):
-                        heapq.heappush(ops, (self.priority(o), o))
+                        if not o.is_recv() or o.send_match in visited:
+                            heapq.heappush(ops, (self.priority(o), o))
 
+        self.ordered_instrs = ordered
+        end = time.time()
+        print(f'Topological Sort: {end-start}')
         return ordered
 
 

@@ -150,7 +150,7 @@ def topo_sort_instrs(instr_dag):
                         heapq.heappush(ops, (priority(o), o))
 
     instr_dag.ordered_instrs = ordered
-    assert instr_dag.num_instrs == len(visited), f'Compilation error: TB assignment {instr_dag.num_instrs} {len(visited)}'
+    assert instr_dag.num_instrs == len(ordered), f'Compilation error: TB assignment {instr_dag.num_instrs} {len(ordered)}'
     end = time.time()
     print(f'Topological Sort: {end-start}')
     return ordered
