@@ -23,7 +23,7 @@ def remove_op(op):
 def same_tb(op1, op2):
     return op1.tb == op2.tb and op1.channel == op2.channel
 
-# TODO: Temporary until Runtime supports strided copy. Fusion with count > 1 can result in deadlocks. 
+# TODO: Temporary until Runtime supports strided copy. Fusion with count > 1 can result in deadlocks and is disabled. 
 def same_count(op1, op2):
     return op1.cnt() == 1 and op1.cnt() == op2.cnt()
 

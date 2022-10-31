@@ -45,14 +45,14 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
         tb_s = tb.send
         tb_r = tb.recv
         tb_c = tb.channel
-        sender_ok = send == -1 or tb_s == send
-        receiver_ok = recv == -1 or tb_r == recv
+        send_match = tb_s == send and send != -1
+        recv_match = tb_r == recv and recv != -1
         channel_ok = channel == tb_c
         local = send == -1 and recv == -1
         tb_local = tb_s == -1 and tb_r == -1
 
         # For correctness - if one of the peer's channels is already allocated we must use it.
-        if channel_ok and sender_ok and receiver_ok and not local:
+        if channel_ok and (send_match or recv_match):
             return [tbid]
         elif channel_ok and tb_local and local:
             return [tbid]
@@ -80,7 +80,7 @@ def auto_assign_tbs(instr_dag):
 
         # Get all possible TBs this can be mapped to
         tb_options = _get_tb_options(instr_dag.tbs[rank], s, r, channel, rank_tbids[rank])
-        
+
         if len(tb_options) == 0: # If there are no options, create a new threadblock
             tbid = rank_tbids[rank]
             instr_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)

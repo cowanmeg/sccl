@@ -468,7 +468,6 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
     chunks = algorithm.instance.chunks
     co_name = algorithm.collective.runtime_name
     num_ranks = algorithm.topology.num_nodes()
-    # TODO: Make the collectives for synthesizer and language the same
     if co_name == 'allreduce':
         collective = lang_collectives.AllReduce(num_ranks, chunks, inplace)
     elif co_name == 'allgather':
@@ -477,7 +476,6 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
         collective = lang_collectives.AllToAll(num_ranks, chunks, inplace)
     elif co_name == 'reduce_scatter':
         collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
-    # TODO: SCCLang instances are they equivalent?
     # Note: turning off instruction fusion is beneficial for some of these algos because 
     # maximal fusion requires more channels+threadblocks which interferes with the rounds.
     program = SCCLProgram(algorithm.name, algorithm.topology, collective, instances, instr_fusion=instr_fusion)
