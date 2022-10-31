@@ -219,7 +219,7 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
-def ir_to_xml(program: Program, device: Device, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False, 
+def ir_to_xml(program: Program, device: Device=Generic, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False, 
     fname=None):
     # Figure out sizes of buffers based on usage and max threadblocks
     buffer_sizes = defaultdict(lambda: 0)
@@ -423,4 +423,5 @@ def ir_to_xml(program: Program, device: Device, old_format=True, use_scratch=Tru
     else:
         with open(fname, 'wb') as f:
             tree.write(f)
-    # return ET.tostring(algo_elem, encoding='unicode')
+    # TODO: Remove this return - update autosynth and ncclize
+    return ET.tostring(algo_elem, encoding='unicode')

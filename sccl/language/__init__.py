@@ -461,19 +461,25 @@ class Ref(ChunkRef):
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
+        other_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
         self.prog.apply_exchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        r1 = self.rank
-        r2 = dst
-        sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
-        sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
+        chunkop = ChunkOp(ChunkInstruction.copy, self, other_chunkref, sendtb, recvtb, ch)
+        self.prog.trace.append(chunkop)
 
-        rop1 = self.prog.instr_dag.add_recv(r2, self, chunkref2, recvtb, ch, sop1)
-        sop1.recv_match = rop1
-        rop2 = self.prog.instr_dag.add_recv(r1, chunkref2, self, recvtb, ch, sop2)
-        sop2.recv_match = rop2
+        chunkop = ChunkOp(ChunkInstruction.copy, other_chunkref, self, sendtb, recvtb, ch)
+        self.prog.trace.append(chunkop)
+
+        # r1 = self.rank
+        # r2 = dst
+        # sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
+        # sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
+
+        # rop1 = self.prog.instr_dag.add_recv(r2, self, chunkref2, recvtb, ch, sop1)
+        # sop1.recv_match = rop1
+        # rop2 = self.prog.instr_dag.add_recv(r1, chunkref2, self, recvtb, ch, sop2)
+        # sop2.recv_match = rop2
 
         return None
 
@@ -485,19 +491,25 @@ class Ref(ChunkRef):
         buffer, index = self.prog.collective.get_buffer_index(self.rank, buffer, index)
 
         assert (self.prog.topo.link(self.rank, dst) or dst == self.rank), f'No link from {self.rank} to {dst}'
-        chunkref2 = self.prog.get_ref(dst, buffer, index, self.size)
+        other_chunkref = self.prog.get_ref(dst, buffer, index, self.size)
 
         self.prog.apply_rexchange(self.rank, self.buffer, self.index, dst, buffer, index, self.size)
 
-        r1 = self.rank
-        r2 = dst
-        sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
-        sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
+        chunkop = ChunkOp(ChunkInstruction.reduce, self, other_chunkref, sendtb, recvtb, ch)
+        self.prog.trace.append(chunkop)
 
-        rop1 = self.prog.instr_dag.add_recv_reduce_copy(r2, self, chunkref2, recvtb, ch, sop1)
-        sop1.recv_match = rop1
-        rop2 = self.prog.instr_dag.add_recv_reduce_copy(r1, chunkref2, self, recvtb, ch, sop2)
-        sop2.recv_match = rop2
+        chunkop = ChunkOp(ChunkInstruction.reduce, other_chunkref, self, sendtb, recvtb, ch)
+        self.prog.trace.append(chunkop)
+
+        # r1 = self.rank
+        # r2 = dst
+        # sop1 = self.prog.instr_dag.add_send(r1, self, chunkref2, sendtb, ch)
+        # sop2 = self.prog.instr_dag.add_send(r2, chunkref2, self, sendtb, ch)
+
+        # rop1 = self.prog.instr_dag.add_recv_reduce_copy(r2, self, chunkref2, recvtb, ch, sop1)
+        # sop1.recv_match = rop1
+        # rop2 = self.prog.instr_dag.add_recv_reduce_copy(r1, chunkref2, self, recvtb, ch, sop2)
+        # sop2.recv_match = rop2
 
         return None
 

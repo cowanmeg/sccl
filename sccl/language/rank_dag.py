@@ -296,8 +296,6 @@ class InstructionDAG:
                 dfs(send, chain)
                 if chain.length() > 2:
                     self.chains.append(chain)
-        end = time.time()
-        print(f'Instr Fusion {end-start}')
 
     def lower_pt1(self, instances):
         self.lower_buffers(instances)
@@ -308,7 +306,6 @@ class InstructionDAG:
 
 
     def infer_dependencies(self, instances=False):
-        start = time.time()
         # for slot, ops in self.operations.items():
         #     frontier = [ops]
         #     visited = set()
@@ -342,9 +339,7 @@ class InstructionDAG:
                             tb = dep_op.tb
                             if tb not in depends or dep_op.step > depends[tb].step:
                                 depends[tb] = dep_op
-        #             op.depends = list(depends.values())
-        end = time.time()
-        print(f'Dependency analysis {end-start}')
+                    op.depends = list(depends.values())
 
     # Convert local scratch buffers to index into one global scratch buffer
     def lower_chunk(self, chunk):
@@ -386,7 +381,6 @@ class InstructionDAG:
     # Interleaved policy only supports single count sends/receives from the input/output buffer
     # (multicount ops are fine between scratch)
     def replicate(self, instances, interleaved):
-        start = time.time()
         if instances == 1:
             self.instanced_tbs = self.tbs
             self.infer_dependencies()
@@ -481,9 +475,6 @@ class InstructionDAG:
         self.convert_set_list()
         self.infer_dependencies(instances=True)
 
-        end = time.time()
-        print(f'Instances {end-start}')
-
     
     def priority(self, op):
         return ((op.chunk_step, -op.priority, op.dst.index))
@@ -491,7 +482,6 @@ class InstructionDAG:
     # Scheduling interface?
     def topo_sort_instrs(self):
         # insert_connection_dependencies(instr_dag)
-        start = time.time()
         visited = set()
         ops = []
         ordered = []
@@ -518,8 +508,6 @@ class InstructionDAG:
                             heapq.heappush(ops, (self.priority(o), o))
 
         self.ordered_instrs = ordered
-        end = time.time()
-        print(f'Topological Sort: {end-start}')
         return ordered
 
 

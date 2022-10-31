@@ -83,7 +83,7 @@ def register_sccl_program(local_topology, collective, machine_type, machines=lam
             prog = SCCLProgram(name, topology, co, instances, protocol, threadblock_policy)
             with prog:
                 fun(prog, machines)
-            prog.check()
+            prog.prgm_check()
             ef = ir_to_xml(prog.lower())
             fd, path = tempfile.mkstemp()
             with os.fdopen(fd, 'w') as f:

@@ -269,9 +269,9 @@ def instance_metadata(gpus, instances):
             gpu.output_chunks *= instances
             gpu.scratch = expand_mappings(gpu.scratch)
 
-def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchTopology, pretty_print = True, 
+def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTopology, pretty_print=True, 
         use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False,
-        instr_fusion=True):
+        instr_fusion=True, fname=None):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 
@@ -480,7 +480,7 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
     # TODO: SCCLang instances are they equivalent?
     # Note: turning off instruction fusion is beneficial for some of these algos because 
     # maximal fusion requires more channels+threadblocks which interferes with the rounds.
-    program = SCCLProgram(algorithm.name, algorithm.topology, collective, 1, instr_fusion=instr_fusion)
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, instances, instr_fusion=instr_fusion)
     with program:
         for rank, gpu in gpus.items():
             for copy_op in gpu.precopies:
@@ -502,4 +502,4 @@ def ncclize(algorithm, remap_scratch = None, channel_policy=ChannelPolicy.MatchT
         
         Check()
                     
-    return ir_to_xml(program.lower())
+    return ir_to_xml(program.lower(), fname=fname)
