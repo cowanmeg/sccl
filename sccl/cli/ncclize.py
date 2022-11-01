@@ -16,6 +16,7 @@ def make_handle_ncclize(cmd_parsers):
     cmd.add_argument('--greedy-scratch-sorting', action='store_true', help='sort scratch buffer indices greedily to increase contiguous operations')
     cmd.add_argument('--no-scratch', action='store_true', help='use extra space at the end of output buffer instead of the scratch buffer')
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
+    cmd.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
 
     def handle(args, command):
@@ -34,6 +35,7 @@ def make_handle_ncclize(cmd_parsers):
                 merge_contiguous=not args.no_merge_contiguous,
                 greedy_scratch_sorting=args.greedy_scratch_sorting,
                 instances=args.instances,
+                protocol=args.protocol,
                 logging=True)
 
             handled = output_handler(args, lambda: ncclized, name_sccl_object(algo.name, ending='sccl.xml'))
