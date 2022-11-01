@@ -271,7 +271,7 @@ def instance_metadata(gpus, instances):
 
 def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTopology, pretty_print=True, 
         use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False,
-        instr_fusion=True, fname=None):
+        protocol='Simple', instr_fusion=True, fname=None):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 
@@ -464,7 +464,7 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
     # instance_metadata(gpus, instances)
 
     # Lower into a SCCLang program
-    inplace = False
+    inplace = True
     chunks = algorithm.instance.chunks
     co_name = algorithm.collective.runtime_name
     num_ranks = algorithm.topology.num_nodes()
@@ -473,17 +473,19 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
     elif co_name == 'allgather':
         collective = lang_collectives.AllGather(num_ranks, chunks, inplace)
     elif co_name == 'alltoall':
+        inplace = False
         collective = lang_collectives.AllToAll(num_ranks, chunks, inplace)
     elif co_name == 'reduce_scatter':
         collective = lang_collectives.ReduceScatter(num_ranks, chunks, inplace)
     # Note: turning off instruction fusion is beneficial for some of these algos because 
     # maximal fusion requires more channels+threadblocks which interferes with the rounds.
-    program = SCCLProgram(algorithm.name, algorithm.topology, collective, instances, instr_fusion=instr_fusion)
+    program = SCCLProgram(algorithm.name, algorithm.topology, collective, instances, protocol=protocol, instr_fusion=instr_fusion)
     with program:
-        for rank, gpu in gpus.items():
-            for copy_op in gpu.precopies:
-                c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
-                c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
+        if not inplace:
+            for rank, gpu in gpus.items():
+                for copy_op in gpu.precopies:
+                    c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
+                    c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
 
         for sends in sends_by_step:
             for send in sends:
@@ -493,10 +495,11 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
                 else:
                     chunk(src, src_buf, src_off, cnt).copy(dst, dst_buf, dst_off, ch=chan)
 
-        for rank, gpu in gpus.items():
-            for copy_op in gpu.postcopies:
-                c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
-                c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
+        if not in place:
+            for rank, gpu in gpus.items():
+                for copy_op in gpu.postcopies:
+                    c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
+                    c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
         
         Check()
                     
