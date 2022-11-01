@@ -6,8 +6,8 @@ def find_best(directory, inplace):
     nccl = None
     results = {}
     for filename in os.listdir(directory):
-        # if 'rexchange' in filename:
-        #     continue
+        if not filename.endswith('.csv'):
+            continue
         f = os.path.join(directory, filename)
         name = f.split('/')[-1].split('.')[0]
         data = pandas.read_csv(f)
@@ -25,7 +25,7 @@ def find_best(directory, inplace):
     max_speedup = {}
     configuration = {}
     for size in nccl['size']:
-        max_speedup[size] = 1
+        max_speedup[size] = -1
         configuration[size] = 'nccl'
 
     for size in nccl['size']:
