@@ -495,7 +495,7 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
                 else:
                     chunk(src, src_buf, src_off, cnt).copy(dst, dst_buf, dst_off, ch=chan)
 
-        if not in place:
+        if not inplace:
             for rank, gpu in gpus.items():
                 for copy_op in gpu.postcopies:
                     c = chunk(rank, copy_op.src_buf, copy_op.src_off, copy_op.cnt)
