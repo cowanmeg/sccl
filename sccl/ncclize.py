@@ -258,17 +258,6 @@ def _greedy_scratch_sort(algorithm, gpus):
             if not addr in gpu.inputs and not addr in gpu.outputs:
                 gpu.scratch[addr] = len(gpu.scratch)
 
-def instance_metadata(gpus, instances):
-    for rank, gpu in gpus.items():
-            # Multiply metadata with instances
-            def expand_mappings(mappings):
-                return { addr * instances + i: idx * instances + i for addr, idx in mappings.items() for i in range(instances) }
-            gpu.inputs = expand_mappings(gpu.inputs)
-            gpu.outputs = expand_mappings(gpu.outputs)
-            gpu.input_chunks *= instances
-            gpu.output_chunks *= instances
-            gpu.scratch = expand_mappings(gpu.scratch)
-
 def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTopology, pretty_print=True, 
         use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False,
         protocol='Simple', instr_fusion=True, fname=None):
@@ -354,14 +343,6 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
         combine_copies(gpu.postcopies)
 
     ##### Sort of the end of buffer management
-
-    # Expand copies by instances if necessary
-    # if instances > 1:
-    #     for rank, gpu in gpus.items():
-    #         for copy in itertools.chain(gpu.precopies, gpu.postcopies):
-    #             copy.src_off *= instances
-    #             copy.dst_off *= instances
-    #             copy.cnt *= instances
 
     def make_intervals(src, dst, addrs_set):
         if len(addrs_set) == 0:
@@ -461,8 +442,6 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
                     sends.append(send)
         sends_by_step.append(sends)
 
-    # instance_metadata(gpus, instances)
-
     # Lower into a SCCLang program
     inplace = True
     chunks = algorithm.instance.chunks
@@ -502,5 +481,6 @@ def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTop
                     c.copy(rank, copy_op.dst_buf, copy_op.dst_off)
         
         Check()
+        CheckIR()
                     
-    return ir_to_xml(program.lower(), fname=fname)
+    return ir_to_xml(program.lower(), fname=None)

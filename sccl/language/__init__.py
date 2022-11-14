@@ -255,7 +255,7 @@ class SCCLProgram:
 
     def ir_check(self):
         # Check generated SCCL-IR for correctness - no circular dependencies, sends and receives are ordered
-        check_dependency_cycles(self.instr_dag.instanced_tbs)
+        check_dependency_cycles(self.instr_dag.tbs)
         check_threadblock_ordering(self.instr_dag)
         check_deadlock(self.instr_dag, self.protocol)
 

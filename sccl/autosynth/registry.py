@@ -84,7 +84,7 @@ def register_sccl_program(local_topology, collective, machine_type, machines=lam
             with prog:
                 fun(prog, machines)
             prog.prgm_check()
-            ef = ir_to_xml(prog.lower())
+            ef = ir_to_xml(prog.lower(), fname=None)
             fd, path = tempfile.mkstemp()
             with os.fdopen(fd, 'w') as f:
                 f.write(ef)

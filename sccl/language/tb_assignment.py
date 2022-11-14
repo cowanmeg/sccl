@@ -6,6 +6,7 @@ from enum import Enum
 import heapq
 from sccl.language.ir import *
 from sccl.language.rank_dag import *
+import pprint as pp
 
 def _verify_tb_op_compatible(tb, op):
     s = op.send_peer() if op.is_send() else -1
@@ -41,6 +42,7 @@ def manual_assign_tbs(instr_dag):
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs):
     options = []
+
     for tbid, tb in mapping.items():
         tb_s = tb.send
         tb_r = tb.recv
@@ -53,15 +55,29 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
 
         # For correctness - if one of the peer's channels is already allocated we must use it.
         if channel_ok and (send_match or recv_match):
-            return [tbid]
+            options.append(tbid)
         elif channel_ok and tb_local and local:
-            return [tbid]
+            options.append(tbid)
         # TODO: Uncomment out if copies should be dispersed.
         # if sender_ok and receiver_ok and channel_ok and (send != -1 or recv != -1):
         #      options.append(tbid)
-        # if send == -1 and recv == -1:
-        #     print(options)
+
+    if len(options) > 1:
+        print("send:", send, "recv:", recv, "chan", channel)
+        print(options)
+        for tbid in options:
+            print(mapping[tbid])
+        print(" ")
     return options
+
+def _create_threadblock(instr_dag, rank_tbids, rank, s, r, channel):
+    tbid = rank_tbids[rank]
+    tb = Threadblock(send=s, recv=r, channel=channel)
+    instr_dag.tbs[rank][tbid] = tb 
+    rank_tbids[rank] += 1
+    tb.send = s
+    tb.recv = r
+    return tbid
 
 def auto_assign_tbs(instr_dag):
     channel_assignment(instr_dag)
@@ -70,6 +86,29 @@ def auto_assign_tbs(instr_dag):
     current_tb_step = []
     for rank_tbs in instr_dag.tbs:
         current_tb_step.append({})
+    send_con_map = []
+    recv_con_map = []
+    for _ in range(instr_dag.num_ranks):
+        send_con_map.append(defaultdict(lambda: -1))
+        recv_con_map.append(defaultdict(lambda: -1))
+    
+    # Create all fused instruction threadblocks
+    for op in instrs:
+        if op.is_fused():
+            rank = op.rank
+            s = op.send_peer()
+            r = op.recv_peer()
+            channel = op.channel
+            
+            # Check that one connection has been assigned but not the other - this is a bug
+            if send_con_map[rank][s, channel] != recv_con_map[rank][r, channel]:
+                print("Error: This should not happen....")
+            # Assign the connections to a threadblock if they haven't already
+            elif send_con_map[rank][s, channel] == -1:
+                tbid = _create_threadblock(instr_dag, rank_tbids, rank, s, r, channel)
+                current_tb_step[rank][tbid] = 0
+                send_con_map[rank][s, channel] = tbid
+                recv_con_map[rank][r, channel]= tbid
 
     for op in instrs:
         rank = op.rank
@@ -82,9 +121,8 @@ def auto_assign_tbs(instr_dag):
         tb_options = _get_tb_options(instr_dag.tbs[rank], s, r, channel, rank_tbids[rank])
 
         if len(tb_options) == 0: # If there are no options, create a new threadblock
-            tbid = rank_tbids[rank]
-            instr_dag.tbs[rank][tbid] = Threadblock(send=s, recv=r, channel=channel)
-            rank_tbids[rank] += 1
+            tbid = _create_threadblock(instr_dag, rank_tbids, rank, s, r, channel)
+            current_tb_step[rank][tbid] = 0
         else: 
             tbid = tb_options[0]
             for tbid_opt in tb_options:
@@ -98,8 +136,6 @@ def auto_assign_tbs(instr_dag):
         instr_dag.num_channels[rank] = max(instr_dag.num_channels[rank], channel+1)
 
         tb.ops.append(op)
-        tb.send = s if op.is_send() else tb.send
-        tb.recv = r if op.is_recv() else tb.recv
         
         op.step = len(tb.ops)-1
         op.tb = tbid
