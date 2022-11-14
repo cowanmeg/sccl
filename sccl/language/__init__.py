@@ -311,7 +311,7 @@ def chunk(rank, buffer, index, size=1):
 def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
 
-def XML(fname=None):
+def XML(fname=sys.stdout):
     _curr().generate_xml(fname)
 
 def Check():
