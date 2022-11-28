@@ -39,20 +39,19 @@ def parse(filename, output):
                     results.append(nums)
             line = f.readline()
 
-    if not using_sccl:
-        print(f"Using NCCL: {filename}")
-
-    with open(output, 'w') as f:
-        if len(results) > 0:
-            print(len(results[0]), results[0])
-            if len(results[0]) == 11:
-                f.write("size,count,type,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
-            elif len(results[0]) == 12:
-                f.write("size,count,type,redop,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
-            elif len(results[0]) == 13:
-                f.write("size,count,type,redop,root,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
-            writer = csv.writer(f)
-            writer.writerows(results)
+    if not using_sccl and 'nccl' not in filename:
+        print(f"Using NCCL: {filename} - skipped")
+    else:
+        with open(output, 'w') as f:
+            if len(results) > 0:
+                if len(results[0]) == 11:
+                    f.write("size,count,type,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
+                elif len(results[0]) == 12:
+                    f.write("size,count,type,redop,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
+                elif len(results[0]) == 13:
+                    f.write("size,count,type,redop,root,oop-time,oop-algbw,oop-busbw,oop-error,ip-time,ip-algbw,ip-busbw,ip-error\n")
+                writer = csv.writer(f)
+                writer.writerows(results)
 
 def parse_directory(directory):
     home = os.getcwd()
@@ -64,7 +63,8 @@ def parse_directory(directory):
         f = os.path.join(directory, filename)
         # checking if it is a file
         if os.path.isfile(f) and f.endswith('.txt'):
-            name = f.split('/')[-1].split('.')[0]
+            # name = f.split('/')[-1].split('.')[0]
+            name, _ = os.path.splitext(filename)
             csv_file = f'{csv_directory}/{name}.csv'
             parse(f, csv_file)
 

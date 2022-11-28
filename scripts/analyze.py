@@ -9,7 +9,7 @@ def find_best(directory, inplace):
         if not filename.endswith('.csv'):
             continue
         f = os.path.join(directory, filename)
-        name = f.split('/')[-1].split('.')[0]
+        name, _ = os.path.splitext(filename)
         data = pandas.read_csv(f)
         if name == 'nccl':
             nccl = data
