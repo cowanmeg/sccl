@@ -18,12 +18,15 @@ def find_best(directory, inplace):
     if inplace:
         time = 'ip-time'
         correct = 'ip-error'
+        bw = 'ip-algbw'
     else:
         time = 'oop-time'
         correct = 'oop-error'
+        bw = 'oop-algbw'
     
     max_speedup = {}
     configuration = {}
+    max_bw = {}
     for size in nccl['size']:
         max_speedup[size] = -1
         configuration[size] = 'nccl'
@@ -38,8 +41,14 @@ def find_best(directory, inplace):
                 if speedup > max_speedup[size] and error < 2e-5:
                     max_speedup[size] = speedup
                     configuration[size] = config
+                    if bw in result:
+                        max_bw[size] = result[bw].values[0]
+                    else:
+                        max_bw[size] = -1
+
+    print("size(B), configuration, speedup over NCCL, BW (gbs)")
     for size in configuration.keys():
-        print(f"{size}, {configuration[size]}, {max_speedup[size]}")
+        print(f"{size}, {configuration[size]}, {max_speedup[size]}, {max_bw[size]}")
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
