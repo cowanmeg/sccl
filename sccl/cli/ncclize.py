@@ -18,7 +18,7 @@ def make_handle_ncclize(cmd_parsers):
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
     cmd.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
-    cmd.add_argument('--no-instr-fusion', action='store_false', help='turn off instruction fusion')
+    cmd.add_argument('-instr-fusion', action='store_true', help='turn on instruction fusion')
 
     def handle(args, command):
         if command != 'ncclize':
@@ -37,7 +37,7 @@ def make_handle_ncclize(cmd_parsers):
                 greedy_scratch_sorting=args.greedy_scratch_sorting,
                 instances=args.instances,
                 protocol=args.protocol,
-                instr_fusion=args.no_instr_fusion,
+                instr_fusion=args.instr_fusion,
                 logging=True)
 
             handled = output_handler(args, lambda: ncclized, name_sccl_object(algo.name, ending='sccl.xml'))

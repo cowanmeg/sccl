@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from enum import Enum
 import heapq
 from sccl.language.ir import *
-from sccl.language.rank_dag import *
+from sccl.language.instruction_dag import *
 import pprint as pp
 
 def _verify_tb_op_compatible(tb, op):
@@ -173,6 +173,7 @@ def topo_sort_instrs(instr_dag):
             rmatch = op.recv_match
             ordered.append(op)
             visited.add(op)
+            op.scheduled = True
             
             # Add a matching receive if one exists and its dependencies are satisfied
             if rmatch is not None and all([x in visited for x in rmatch.prev]): 
@@ -184,7 +185,9 @@ def topo_sort_instrs(instr_dag):
                         heapq.heappush(ops, (priority(o), o))
 
     instr_dag.ordered_instrs = ordered
-    assert instr_dag.num_instrs == len(ordered), f'Compilation error: TB assignment {instr_dag.num_instrs} {len(ordered)}'
+    # This error sometimes shows up with manual tb assignment or instruction fusion introducing a circular dependency
+    assert instr_dag.num_instrs == len(ordered), \
+        f'Error TB assignment: Instructions in DAG: {instr_dag.num_instrs} vs. instructions scheduled {len(ordered)}'
     return ordered
 
 # TODO: Merge flow channel assignment with fusion
@@ -288,15 +291,15 @@ def insert_connection_dependencies(instr_dag):
             heapq.heappush(frontier, (priority(op), op))     
     iterate(frontier)
 
-
     for instrs in connections.values():
         # Remote buffer constraint. Across a connection only slot number of sends are allowed to be buffered
         # before the receiver reads
         for i in range(slots, len(instrs)):
-            inst = instrs[i]
-            prev_inst = instrs[i-slots]
-            inst.prev.add(prev_inst.recv_match)
-            prev_inst.recv_match.next.append(inst)
+            send = instrs[i]
+            buffer_slot_recv = instrs[i-slots].recv_match
+            # Send cannot be scheduled until buffer_slot_recv is scheduled or else the buffer will be full.
+            send.prev.add(buffer_slot_recv)
+            buffer_slot_recv.next.append(send)
 
         # In-order constraint. Across a connection: send a, send b --> recv a, recv b
         for i in range(0, len(instrs)-1):
@@ -307,7 +310,7 @@ def insert_connection_dependencies(instr_dag):
 
             recv0.next.append(recv1)
             recv1.prev.add(recv0)
-    # _detect_cycle(instr_dag)
+    _detect_cycle(instr_dag)
     
 
 def _detect_cycle(instr_dag):

@@ -268,15 +268,15 @@ class InstructionDAG:
 
     def _instr_fusion(self):
         start = time.time()
-        def dfs(send_op, flow):
+        def dfs(send_op, chain):
             op = send_op.recv_match
             for next_op in op.next:
-                if next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and flow.can_add(next_op):
+                if next_op.inst == Instruction.send and same_tb(op, next_op) and same_count(op, next_op) and chain.can_add(next_op):
                     if op.inst == Instruction.recv:
                         op.inst = Instruction.recv_copy_send
                     else: # op.inst == Instruction.recv_reduce_copy:
                         nnext_op = next_op.next[0] if len(next_op.next) > 0 else None
-                        if nnext_op and nnext_op.inst is Instruction.recv and same_tb(op, next_op) and same_count(op, nnext_op):
+                        if nnext_op and nnext_op.inst is Instruction.recv and same_count(op, nnext_op):
                             op.inst = Instruction.recv_reduce_send   
                         else:
                             op.inst = Instruction.recv_reduce_copy_send
@@ -284,11 +284,11 @@ class InstructionDAG:
                     op.fused_dst = next_op.dst 
                     next_op.recv_match.send_match = op
                     op.recv_match = next_op.recv_match
-                    remove_op(next_op)
-                    flow.add(op)
+                    remove_op(next_op) # Remove the send that was fused into the previous instruction
+                    chain.add(op)
                     self.num_instrs -= 1
-                    return dfs(op, flow)
-            return flow
+                    return dfs(op, chain)
+            return chain
 
         for send in self.sends:
             if send.inst == Instruction.send:
@@ -306,29 +306,6 @@ class InstructionDAG:
 
 
     def infer_dependencies(self, instances=False):
-        # for slot, ops in self.operations.items():
-        #     frontier = [ops]
-        #     visited = set()
-        #     i = 0
-        #     while i < len(frontier):
-        #         op = frontier[i]
-        #         if op not in visited:
-        #             visited.add(op)
-        #             # Dependencies for every op is the same as the ops that are stored in prev
-        #             # Filter out dependencies that are satisified by tbs executing ops sequentially
-        #             # If multiple dependent ops from the same tb keep the one that happens last
-        #             # Filter out dependencies between two different ranks
-        #             depends = {}
-        #             for dep_op in list(op.prev):
-        #                 if dep_op.inst != Instruction.start and op.rank == dep_op.rank:
-        #                     tb = dep_op.tb
-        #                     if tb not in depends or dep_op.step > depends[tb].step:
-        #                         depends[tb] = dep_op
-        #             op.depends = list(depends.values())
-        #             frontier += op.next
-        #         i += 1
-
-        # TODO: More testing to see this is equivalent
         tbs = self.instanced_tbs if instances else self.tbs
         for rank_tbs in tbs:
             for tb in rank_tbs.values():
@@ -474,123 +451,3 @@ class InstructionDAG:
 
         self.convert_set_list()
         self.infer_dependencies(instances=True)
-
-    
-    def priority(self, op):
-        return ((op.chunk_step, -op.priority, op.dst.index))
-        
-    # Scheduling interface?
-    def topo_sort_instrs(self):
-        # insert_connection_dependencies(instr_dag)
-        visited = set()
-        ops = []
-        ordered = []
-        for op in self.operations.values():
-            if op.inst == Instruction.start:
-                visited.add(op)
-                for o in op.next:
-                    if (o.inst == Instruction.send or o.inst == Instruction.copy) and all([x in visited for x in o.prev]):
-                        heapq.heappush(ops, (self.priority(o), o))
-        while len(ops) > 0:
-            _, op = heapq.heappop(ops)
-            if op not in visited:
-                rmatch = op.recv_match
-                ordered.append(op)
-                visited.add(op)
-                
-                # Add a matching receive if one exists and its dependencies are satisfied
-                if rmatch is not None and all([x in visited for x in rmatch.prev]): 
-                    heapq.heappush(ops, (self.priority(rmatch), rmatch))
-                # Add other operation that have dependencies satisfied
-                for o in op.next:
-                    if all([x in visited for x in o.prev]):
-                        if not o.is_recv() or o.send_match in visited:
-                            heapq.heappush(ops, (self.priority(o), o))
-
-        self.ordered_instrs = ordered
-        return ordered
-
-
-    # Return all the unique connections made in the program
-    def get_connections(self):
-        self._complete_metadata()
-        toposorted = self.topo_sort_instrs()
-        send_connections = []
-        recv_connections = []
-        for _ in range(self.num_ranks):
-            send_connections.append(defaultdict(list))
-            recv_connections.append(defaultdict(list))
-
-        for inst in toposorted:
-            if inst.is_send():
-                send_connections[inst.rank][inst.send_peer()].append(inst)
-            elif inst.is_recv():
-                recv_connections[inst.rank][inst.recv_peer()].append(inst)
-        
-        self.send_connections = send_connections
-        self.recv_connections = recv_connections
-        return send_connections, recv_connections
-        
-
-    def split_connection(self, rank, peer, num_channels, blocked=False):
-        sends = self.send_connections[rank][peer]
-        num_sends = len(sends)
-        if num_channels > num_sends:
-            return False
-            
-           
-        elif blocked:
-            each_channel = ceil(num_sends / num_channels)
-            for i in range(num_sends, step=each_channel):
-                block = sends[i:i+each_channel]
-                for send in block:
-                    send.channel = i
-                    send.recv_match.channel = i
-        else:
-            for i, send in enumerate(sends):
-                send.channel = i % num_channels
-                send.recv_match.channel = i % num_channels
-    
-    def get_connections_on_channel(self, rank, channel):
-        scons = defaultdict(list)
-        for peer, insts in self.send_connections[rank].items():
-            for inst in insts:
-                if inst.channel == channel:
-                    scons[peer].append(inst)
-
-        rcons = defaultdict(list)
-        for peer, insts in self.recv_connections[rank].items():
-            for inst in insts:
-                if inst.channel == channel:
-                    rcons[peer].append(inst)
-
-        return scons, rcons
-
-    def merge_threadblocks(self, scon, rcon, tb):
-        for i in scon:
-            i.tb = tb
-        for i in rcon:
-            i.tb = tb
-    
-
-
-    # def merge_threadblocks(self, merges: set[chan_t]) -> dict[Op, tbid_t]:
-    #     # this only works because we've assumed all ranks are isomorphic
-    #     tb_groups: dict[str, set[Op]] = defaultdict(set)
-
-    #     for op in channel_assignment:
-    #         if (chan := channel_assignment[op]) in merges:
-    #             tb_groups[f'sr{chan}'].add(op)
-    #         elif op.is_send():
-    #             tb_groups[f's{chan}'].add(op)
-    #         elif op.is_recv():
-    #             tb_groups[f'r{chan}'].add(op)
-    #         else:
-    #             assert False, "local op somehow made it into the channel assignment??"
-
-    #     tb_assignment: dict[Op, tbid_t] = {}
-    #     for i, tb in enumerate(tb_groups.values()):
-    #         for op in tb:
-    #             tb_assignment[op] = tbid_t(i + 1) # reserve 0 for all local operations
-
-    #     return tb_assignment
