@@ -2,10 +2,10 @@
 # Licensed under the MIT License.
 
 from .common import *
-from sccl.serialization import SCCLEncoder, SCCLDecoder
-from sccl.algorithm import Algorithm, Step
-from sccl.topologies import fully_connected
-from sccl.instance import Instance
+from msccl.serialization import SCCLEncoder, SCCLDecoder
+from msccl.algorithm import Algorithm, Step
+from msccl.topologies import fully_connected
+from msccl.instance import Instance
 
 def test_algorithm_roundtrip():
     name = 'test_algorithm'
