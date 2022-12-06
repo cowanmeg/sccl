@@ -16,6 +16,7 @@ def make_handle_ncclize(cmd_parsers):
     cmd.add_argument('--greedy-scratch-sorting', action='store_true', help='sort scratch buffer indices greedily to increase contiguous operations')
     cmd.add_argument('--no-scratch', action='store_true', help='use extra space at the end of output buffer instead of the scratch buffer')
     cmd.add_argument('--channel-policy', type=ChannelPolicy, choices=list(ChannelPolicy), default=ChannelPolicy.MatchTopology, help='channel allocation policy')
+    cmd.add_argument('--use-mscclang', action='store_true', help='lower through MSCCLang')
     cmd.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
     cmd.add_argument('--instances', type=int, default=1, help='number of interleaved instances of the algorithm to make')
     cmd.add_argument('-instr-fusion', action='store_true', help='turn on instruction fusion')
@@ -28,7 +29,8 @@ def make_handle_ncclize(cmd_parsers):
         validate_output_args(args)
 
         for algo in input_algorithms:
-            ncclized = ncclize(algo,
+            if args.use_mscclang:
+                ncclized = ncclize(algo,
                 remap_scratch=args.remap_scratch,
                 channel_policy=args.channel_policy,
                 pretty_print=not args.no_pretty_print,
@@ -39,6 +41,16 @@ def make_handle_ncclize(cmd_parsers):
                 protocol=args.protocol,
                 instr_fusion=args.instr_fusion,
                 logging=True)
+            else:
+                ncclized = ncclize(algo,
+                    remap_scratch=args.remap_scratch,
+                    channel_policy=args.channel_policy,
+                    pretty_print=not args.no_pretty_print,
+                    use_scratch=not args.no_scratch,
+                    merge_contiguous=not args.no_merge_contiguous,
+                    greedy_scratch_sorting=args.greedy_scratch_sorting,
+                    instances=args.instances,
+                    logging=True)
 
             handled = output_handler(args, lambda: ncclized, name_msccl_object(algo.name, ending='msccl.xml'))
 

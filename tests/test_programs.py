@@ -43,6 +43,7 @@ def test_registered_allreduce_ring():
         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         allreduce_ring(num_ranks, num_ranks)
         assert Check()
+        CheckIR()
         XML()
 
 def test_registered_allreduce_allpairs():
@@ -56,6 +57,7 @@ def test_registered_allreduce_allpairs():
         protocol="LL", threadblock_policy=ThreadblockPolicy.manual):
         allreduce_allpairs(num_ranks)
         assert Check()
+        CheckIR()
         XML()
 
 def test_registered_ndv4_allreduce(capsys):
