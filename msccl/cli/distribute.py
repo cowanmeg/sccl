@@ -65,7 +65,7 @@ def make_handle_create_subproblem_distributed_alltoall(cmd_parsers):
     cmd.add_argument('--relay-nodes', type=int, nargs='+', default=[0], help='relay nodes')
     cmd.add_argument('-bw', '--remote-bandwidth', type=int, default=1, help='remote bandwidth', metavar='N')
     cmd.add_argument('--share-bandwidth', action='store_true', help='share local bandwidth between relay nodes')
-    validate_output_args, output_handler = add_output_sccl_objects(cmd)
+    validate_output_args, output_handler = add_output_msccl_objects(cmd)
 
     def handle(args, command):
         if command != name:

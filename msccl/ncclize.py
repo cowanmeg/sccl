@@ -260,7 +260,7 @@ def _greedy_scratch_sort(algorithm, gpus):
 
 def ncclize(algorithm, remap_scratch=None, channel_policy=ChannelPolicy.MatchTopology, pretty_print=True, 
         use_scratch=True, merge_contiguous=True, greedy_scratch_sorting=False, instances=1, logging=False,
-        protocol='Simple', instr_fusion=False, fname=None):
+        protocol='Simple', instr_fusion=True, fname=None):
     '''
     Generate the XML format used by the NCCL SCCL backend.
 

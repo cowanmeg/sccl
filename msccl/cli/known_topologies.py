@@ -51,7 +51,7 @@ class KnownTopologies:
                 print(f'error: input file not found: {input_file}', file=sys.stderr)
                 exit(1)
 
-            return load_sccl_object(input_file)
+            return load_msccl_object(input_file)
         return make
 
     def _fixed_topo(self, Cls):

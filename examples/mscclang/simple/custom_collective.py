@@ -8,7 +8,7 @@ from msccl.topologies import *
 from msccl.language.collectives import Collective
 
 # For custom collectives you need to define a new collective class
-# this is used by scclang to initialize buffers with chunks (pre-condition)
+# this is used by mscclang to initialize buffers with chunks (pre-condition)
 # and provide a checker to check that chunks satisfy the post-condition of the collective.
 class CollEx(Collective):
     # Initial state is chunk0 is on rank0 in the input buffer
@@ -45,7 +45,7 @@ class CollEx(Collective):
 
 
 def custom_example1():
-    # SCCLang programs take in a name for hte program, the topology of the network, 
+    # MSCCLang programs take in a name for hte program, the topology of the network, 
     # collective being implemented, chunksperloop of the collective, and optionally the NCCL protocol to be used
     size = 3
     topology = fully_connected(size) 
@@ -56,8 +56,8 @@ def custom_example1():
         c = chunk(0, Buffer.input, 0)
         # Send chunks to 1 and 2
         # Can specify the sender's tb, receiver's tb, and channel for the send operation
-        # SCCLang provides a default threadblock assignment if they aren't specified
-        # SCCLang will also check the tb/channel combos are valid
+        # MSCCLang provides a default threadblock assignment if they aren't specified
+        # MSCCLang will also check the tb/channel combos are valid
         c.copy(1, buffer=Buffer.output, index=0, sendtb=1, recvtb=1, ch=0)
         c.copy(2, buffer=Buffer.output, index=0, sendtb=2, recvtb=1, ch=1)
 

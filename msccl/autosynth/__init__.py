@@ -1,7 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from msccl.topologies import dgx1, nvlink_only
+from msccl.topologies import dgx1, dgx_a100, nvlink_only
 from msccl.isomorphisms import find_isomorphisms
 from msccl.autosynth.registry import synthesis_plans
 from lxml import etree as ET
@@ -34,6 +34,19 @@ class Collective(Enum):
 
 
 def init(machine_type, num_machines, *collectives):
+    # first detect the machine type in case auto was passed in
+    if machine_type == "auto":
+        nvlink_matrix = nvlink_only()
+        isomorphisms = find_isomorphisms(dgx1(), nvlink_matrix)
+        if len(isomorphisms) == 4:
+            machine_type = "ndv2"
+        elif nvlink_matrix.links == dgx_a100().links:
+            machine_type = "ndv4"
+        else:
+            print(f'Did not recognize the SKU type automatically. If you are sure about the SKU, try replacing "auto" with your explicit SKU name. Falling back to NCCL.')
+            return
+        print(f"The auto-detected SKU is a {machine_type}.")
+
     # Collect and sort all plans that match the collectives and sizes given by the user.
     selected_plans = {}
     for collective in collectives:
@@ -58,8 +71,8 @@ def init(machine_type, num_machines, *collectives):
         if len(plans) > 0:
             selected_plans[name] = plans
 
-    # Execute the plans to find or synthesize the algorithms and format them in the XML format expected by SCCL-RT.
-    algos_elem = ET.Element('sccl_algos')
+    # Execute the plans to find or synthesize the algorithms and format them in the XML format expected by MSCCL-RT.
+    algos_elem = ET.Element('msccl_algos')
     any_selected = False
     for collective_name, plans in selected_plans.items():
         for plan, params in plans:
@@ -82,25 +95,25 @@ def init(machine_type, num_machines, *collectives):
 
         # Set environment variables
         env = {
-            'SCCL_CONFIG': path,
+            'MSCCL_CONFIG': path,
         }
         if 'NCCL_ALGO' in os.environ and os.environ['NCCL_ALGO'] != '':
             existing_algos = os.environ['NCCL_ALGO']
-            if 'SCCL' not in existing_algos.split(','):
-                os.environ['NCCL_ALGO'] = 'SCCL,' + existing_algos
+            if 'MSCCL' not in existing_algos.split(','):
+                os.environ['NCCL_ALGO'] = 'MSCCL,' + existing_algos
         else:
-            env['NCCL_ALGO'] = 'SCCL,RING,TREE'
+            env['NCCL_ALGO'] = 'MSCCL,RING,TREE'
         if machine_type == 'ndv4' and num_machines >= 8 and 'alltoall' in selected_plans:
-            print(f'SCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
+            print(f'MSCCL: Setting NCCL_IB_AR_THRESHOLD=0 (reason: alltoall and at least 16 ndv4 machines)')
             env['NCCL_IB_AR_THRESHOLD'] = '0'
         if machine_type == 'ndv4':
-            print(f'SCCL: Setting relaxed orderin, topo file and visible devices order')
+            print(f'MSCCL: Setting relaxed orderin, topo file and visible devices order')
             env['NCCL_IB_PCI_RELAXED_ORDERING'] = '1'
             env['NCCL_TOPO_FILE'] = '/opt/msft/topo.xml'
             env['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
         os.environ.update(env)
     else:
-        print(f'SCCL: No algorithms were selected.')
+        print(f'MSCCL: No algorithms were selected.')
 
 
 def _format_size(size):
@@ -152,10 +165,10 @@ def _select_plans(name, candidates, num_machines, sizes):
         sorted_candidates = sorted(candidates, key=_candidate_sort_key)
         description = f'{name} with sizes from {_format_size(isizes[0])} to {_format_size(isizes[1])}'
         if len(sorted_candidates) == 0:
-            print(f'SCCL: No plan found for {description}. Falling back to NCCL baseline.')
+            print(f'MSCCL: No plan found for {description}. Falling back to NCCL baseline.')
         else:
             desc, plan, _, _, proto, _ = sorted_candidates[-1]
-            print(f'SCCL: Plan for {description} is {desc} with {proto} protocol.')
+            print(f'MSCCL: Plan for {description} is {desc} with {proto} protocol.')
             if len(results) > 0 and plan == results[-1][0] and isizes[0] == results[-1][1][1] + 1 and proto == results[-1][1][2]:
                 results[-1][1][1] = isizes[1]
             else:
@@ -169,11 +182,11 @@ def _candidate_sort_key(candidate):
 
 
 def ndv2_perm(): # pragma: no cover
-    # This function is used in a hacky way right now. The sccl_ndv2_launcher.sh
+    # This function is used in a hacky way right now. The msccl_ndv2_launcher.sh
     # relies on the side effect of _select_isomorphism creating the lock file,
     # which is read by the script after calling this function, so the return
     # value does't currently get used. If you make changes, please fix or update
-    # sccl_ndv2_launcher.sh accordingly.
+    # msccl_ndv2_launcher.sh accordingly.
     isomorphisms = find_isomorphisms(dgx1(), nvlink_only())
     if len(isomorphisms) != 4:
         raise RuntimeError(
@@ -182,7 +195,7 @@ def ndv2_perm(): # pragma: no cover
 
 
 def _select_isomorphism(isomorphisms, verbose=True): # pragma: no cover
-    with open('/var/lock/sccl_autosynth_inspector_topo.lock', "a+") as f:
+    with open('/var/lock/msccl_autosynth_inspector_topo.lock', "a+") as f:
         fcntl.lockf(f, fcntl.LOCK_EX)
         try:
             f.seek(0, 2)
@@ -191,16 +204,16 @@ def _select_isomorphism(isomorphisms, verbose=True): # pragma: no cover
                 f.seek(0)
                 order = f.read()
                 if verbose:
-                    print(f'SCCL: Read IB placement from {f.name}')
+                    print(f'MSCCL: Read IB placement from {f.name}')
                 return order
             else:
                 print(
-                    'SCCL: Running inspector-topo to find the IB placement. This will take a couple of minutes...')
+                    'MSCCL: Running inspector-topo to find the IB placement. This will take a couple of minutes...')
                 env = os.environ.copy()
                 env['CUDA_VISIBLE_DEVICES'] = '0,1,2,3,4,5,6,7'
                 topo_detect = subprocess.run(
                     ['/usr/local/bin/inspector-topo'], stdout=subprocess.PIPE, stderr=subprocess.PIPE, env=env)
-                print('SCCL: Finished running inspector-topo. Finding the permutaion.')
+                print('MSCCL: Finished running inspector-topo. Finding the permutaion.')
                 if topo_detect.returncode != 0:
                     raise RuntimeError(
                         f'inspector-topo had a failure:\n{topo_detect.stdout}\n{topo_detect.stderr}')
@@ -218,7 +231,7 @@ def _select_isomorphism(isomorphisms, verbose=True): # pragma: no cover
                         f.write(order)
                         f.flush()
                         if verbose:
-                            print(f'SCCL: Wrote IB placement to {f.name}')
+                            print(f'MSCCL: Wrote IB placement to {f.name}')
                         return order
                 raise RuntimeError(
                     f'expected an isomorphism to match our expectation but none of them did!')

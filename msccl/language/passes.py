@@ -214,4 +214,3 @@ def check_threadblock_ordering(instr_dag):
                             # assert match.step >  prev_steps[other_tbid].step, f"Rank {sender} sends op1 then op2 but {receiver} receives op2 then op1"
                         
                     prev_steps[other_tbid] = match
-

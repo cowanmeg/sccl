@@ -62,8 +62,9 @@ def register_synthesis_plan(collective, machine_type, machines=lambda x: True, s
     return decorator
 
 
-def register_sccl_program(local_topology, collective, machine_type, machines=lambda x: True, sizes=None, protocol='Simple', 
-    chunk_factor=1, priority=0, collective_obj=None, instances=1, inplace=False, threadblock_policy=ThreadblockPolicy.auto):
+def register_msccl_program(local_topology, collective, machine_type, machines=lambda x: True, sizes=None, protocol='Simple', 
+    chunk_factor=1, priority=0, collective_obj=None, instances=1, inplace=False, threadblock_policy=ThreadblockPolicy.auto,
+    interleaved_replication=True, dependence_nop=False):
     def decorator(fun):
         name = fun.__name__
         def wrapped(machines):

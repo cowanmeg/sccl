@@ -55,7 +55,7 @@ def make_handle_solve_pareto_optimal(cmd_parsers):
     cmd = cmd_parsers.add_parser(name)
     topologies = KnownTopologies(cmd)
     collectives = KnownCollectives(cmd)
-    validate_output_args, output_handler = add_output_sccl_objects(cmd)
+    validate_output_args, output_handler = add_output_msccl_objects(cmd)
     cmd.add_argument('--min-chunks', type=int, default=1, metavar='N')
     cmd.add_argument('--max-chunks', type=int, default=None, metavar='N')
     cmd.add_argument('--assume-rpc-bound', default=None, help='assume bandwidth optimality requires at least this many rounds per chunk', metavar='N/N')

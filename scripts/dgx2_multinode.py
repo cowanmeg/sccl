@@ -122,7 +122,7 @@ def alltoall_2d():
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_2d_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
         if compile:
-            cmd = f'python3 sccl/examples/scclang/alltoall_a100_yifan.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
+            cmd = f'python3 sccl/examples/scclang/alltoall_a100_2d.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
             print(f'$ {cmd}')
             os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower, upper)
@@ -141,7 +141,7 @@ def alltoall_8kp1():
         txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_8kp1_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
         if compile:
-            cmd = f'python3 sccl/examples/scclang/alltoall_a100.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
+            cmd = f'python3 sccl/examples/scclang/alltoall_a100_8kp1.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
             print(f'$ {cmd}')
             os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower, upper)

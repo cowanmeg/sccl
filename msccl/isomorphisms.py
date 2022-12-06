@@ -48,14 +48,14 @@ def find_isomorphisms(topology, target_topology, limit=None, logging=False):
     Finds all isomorphisms from one topology to a target topology. Returns a list of permutations.
     '''
     if len(topology.switches) > 0:
-        print('SCCL Warning: Topologies with switches are not supported. import sccl will be ignored.')
+        print('MSCCL Warning: Topologies with switches are not supported. import msccl will be ignored.')
         return []
 
     if limit != None and limit <= 0:
-        raise ValueError('SCCL error: limit was set improperly.')
+        raise ValueError('MSCCL error: limit was set improperly.')
     
     if topology.num_nodes() != target_topology.num_nodes():
-        raise ValueError('SCCL error: target topology does not match with the given topology.')
+        raise ValueError('MSCCL error: target topology does not match with the given topology.')
 
     if logging:
         print(f'Encoding {topology.name} - {target_topology.name} isomorphisms to Z3')

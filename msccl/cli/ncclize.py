@@ -40,7 +40,7 @@ def make_handle_ncclize(cmd_parsers):
                 instr_fusion=args.instr_fusion,
                 logging=True)
 
-            handled = output_handler(args, lambda: ncclized, name_sccl_object(algo.name, ending='sccl.xml'))
+            handled = output_handler(args, lambda: ncclized, name_msccl_object(algo.name, ending='msccl.xml'))
 
         return True
     

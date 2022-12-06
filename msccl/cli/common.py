@@ -8,15 +8,15 @@ import sys
 import re
 from fractions import Fraction
 
-def _legalize_sccl_name(name):
+def _legalize_msccl_name(name):
     name = name.replace('(', '.')
     name = name.replace('=', '')
     name = name.replace(',', '.')
     name = name.replace(')', '')
     return name
 
-def name_sccl_object(name, ending='sccl.json'):
-    return f'{_legalize_sccl_name(name)}.{ending}'
+def name_msccl_object(name, ending='msccl.json'):
+    return f'{_legalize_msccl_name(name)}.{ending}'
 
 def _validate_output_directory(directory):
     if not directory.exists():
@@ -80,7 +80,7 @@ def add_output_algorithm(parser):
         if algorithm == None:
             return # Strategies/distributors have their specific failure prints
 
-        handled = handle_file(args, lambda: SCCLEncoder().encode(algorithm), name_sccl_object(algorithm.name))
+        handled = handle_file(args, lambda: MSCCLEncoder().encode(algorithm), name_msccl_object(algorithm.name))
         if not handled:
             print(f'\n{algorithm.name} algorithm:')
             print(algorithm)
@@ -91,11 +91,11 @@ def add_output_topology(parser):
     validate_args, handle_file = add_output_file(parser)
 
     def handle(args, topology):
-        handled = handle_file(args, lambda: SCCLEncoder().encode(topology), name_sccl_object(topology.name))
+        handled = handle_file(args, lambda: MSCCLEncoder().encode(topology), name_msccl_object(topology.name))
 
     return validate_args, handle
 
-def add_output_sccl_objects(parser):
+def add_output_msccl_objects(parser):
     parser.add_argument('-d', '--directory', type=Path, default=Path(), help='directory to write outputs to', metavar='DIR')
     parser.add_argument('-f', '--force', action='store_true', help='overwrite existing files')
     parser.add_argument('--no-save', action='store_true', help='do not save to file')
@@ -103,9 +103,9 @@ def add_output_sccl_objects(parser):
     def validate_args(args):
         _validate_output_directory(args.directory)
 
-    def handle(args, sccl_object, name):
+    def handle(args, msccl_object, name):
         if not args.no_save:
-            _handle_write_to_directory(args.directory, args.force, lambda: SCCLEncoder().encode(sccl_object), name_sccl_object(name))
+            _handle_write_to_directory(args.directory, args.force, lambda: MSCCLEncoder().encode(msccl_object), name_msccl_object(name))
     
     return validate_args, handle
 
@@ -119,7 +119,7 @@ def add_input_algorithm(parser, multiple=False, name='algorithm'):
                 print(f'error: input file not found: {input_file}', file=sys.stderr)
                 exit(1)
 
-            algo = load_sccl_object(input_file)
+            algo = load_msccl_object(input_file)
             algos.append(algo)
         if multiple:
             return algos

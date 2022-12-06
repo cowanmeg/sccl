@@ -237,7 +237,7 @@ def test_illegal_tb_assignment():
             chunk(0, Buffer.input, 1).copy(2, Buffer.output, 0, sendtb=0, recvtb=1)
             XML()
 
-def test_registered_alltoall_yifan():
+def test_registered_alltoall_2d():
     from msccl.programs.alltoall_a100_2d import alltoall_hierarchical 
 
     num_nodes = 4
@@ -273,6 +273,25 @@ def test_registered_allreduce():
         protocol="LL128", threadblock_policy=ThreadblockPolicy.manual):
         allreduce_ring(num_ranks, num_ranks)
         assert Check()
+
+def test_routines_allreduce_nodes():
+    size = 8
+    topology = fully_connected(size)
+    collective = AllReduce(size, size, True)
+    with MSCCLProgram("allreduce_multi", topology, collective, 1):
+        # Two parallel rings [0-4] and [4-8]
+        allreduce_ring_inplace(4, 0, 0)
+        allreduce_ring_inplace(4, 0, 4, ch=1)
+
+        allreduce_ring_inplace(4, 4, 4)
+        allreduce_ring_inplace(4, 4, 0, ch=1)
+        # Reduction between peers (0,4) (1,5) etc.
+        for r in range(0,8):
+            peer = (r+4)%size
+            exchange_index = 0 if r < 4 else 4
+            c = chunk(peer, Buffer.output, exchange_index, 4)
+            c.reduce(chunk(r, Buffer.output, exchange_index, 4))
+            c = c.copy(r, Buffer.output, exchange_index)
         XML()
 
 def test_routines_allgather_ring_inplace():

@@ -14,13 +14,14 @@ import argcomplete
 import sys
 
 def main():
-    parser = argparse.ArgumentParser('sccl')
+    parser = argparse.ArgumentParser('msccl')
 
     cmd_parsers = parser.add_subparsers(title='command', dest='command')
     cmd_parsers.required = True
 
     handlers = []
     handlers.append(make_solvers(cmd_parsers))
+    handlers.append(make_composers(cmd_parsers))
     handlers.append(make_distributors(cmd_parsers))
     handlers.append(make_analyses(cmd_parsers))
     handlers.append(make_handle_ncclize(cmd_parsers))

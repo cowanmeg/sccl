@@ -1,7 +1,6 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
-from bdb import effective
 import math
 from dataclasses import dataclass
 from enum import Enum

@@ -6,7 +6,6 @@ from enum import Enum
 import heapq
 from msccl.language.ir import *
 from msccl.language.instruction_dag import *
-import pprint as pp
 
 def _verify_tb_op_compatible(tb, op):
     s = op.send_peer() if op.is_send() else -1
@@ -32,17 +31,14 @@ def manual_assign_tbs(instr_dag):
             tb.send = op.send_peer() if op.is_send() else tb.send
             tb.recv = op.recv_peer() if op.is_recv() else tb.recv
             op.step = len(tb.ops)-1
-            instr_dag.num_channels[rank] = max(op.channel+1, instr_dag.num_channels[rank] )
+            instr_dag.num_channels[rank] = max(op.channel+1, instr_dag.num_channels[rank])
         else:
             raise Exception(f"Illegal threadblock assignment. Trying to add {op} to threadblock {tbid}\n" \
                 f"Threadblock {tbid} send:{tb.send} recv:{tb.recv} channel:{tb.channel}\n" \
                 f"Operation send:{op.dst.rank if op.is_send() else -1} recv:{op.dst.rank if op.is_recv() else -1} channel:{op.channel}")
-    # debug_print(instr_dag)
-
 
 def _get_tb_options(mapping, send, recv, channel, num_tbs):
     options = []
-
     for tbid, tb in mapping.items():
         tb_s = tb.send
         tb_r = tb.recv
@@ -173,7 +169,6 @@ def topo_sort_instrs(instr_dag):
             rmatch = op.recv_match
             ordered.append(op)
             visited.add(op)
-            op.scheduled = True
             
             # Add a matching receive if one exists and its dependencies are satisfied
             if rmatch is not None and all([x in visited for x in rmatch.prev]): 
