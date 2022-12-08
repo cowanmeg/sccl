@@ -58,7 +58,7 @@ def allreduce_hierarchical():
         txt = f"{home}/{machine}/allreduce_{nodes}nodes/hierarchical_{instances}_{protocol}_{schedule}.txt"
         print(f'Generating {xml} {txt}')
         if compile:
-            cmd = f'python3 sccl/examples/scclang/hierarchical_allreduce_blueconnect.py {gpus_per_node} {nodes} '\
+            cmd = f'python3 sccl/examples/scclang/allreduce_multinode_hierarchical.py {gpus_per_node} {nodes} '\
                 f'{instances} --protocol={protocol}  --schedule={schedule} --device=V100 --output={xml}'
             print(f'$ {cmd}')
             os.system(cmd)
