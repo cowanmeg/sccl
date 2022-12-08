@@ -51,49 +51,33 @@ def mpirun(collective, gpus, xml, txt, lower=default_lower, upper=default_upper,
 def mpirun_nccl(collective, gpus, txt, lower=default_lower, upper=default_upper, algo='RING,TREE'):
     mpirun(collective, gpus, None, txt, lower, upper, algo=algo)
 
-def allreduce_rexchange():
-    assert nodes == 2, f"Rexchange hierarchical allreduce only works for 2 nodes"
-    def run(instances, protocol, schedule, lower='512B'):
-        xml = f"{home}/xmls/rexchange_{instances}_{protocol}_{schedule}.xml"
-        txt = f"{home}/{machine}/allreduce_{nodes}nodes/rexchange_{instances}_{protocol}_{schedule}.txt"
-        print(f'Generating {xml} {txt}')
-        if compile:
-            cmd = f'python3 sccl/examples/scclang/allreduce_a100_hierarchical.py {gpus_per_node} {nodes} {instances} --protocol={protocol} --schedule={schedule} --device=V100 --output={xml}'
-            print(f'$ {cmd}')
-            os.system(cmd)
-        mpirun('all_reduce', gpus, xml, txt, lower)
-
-    run(8, 'Simple', 'manual')
-    run(2, 'LL128', 'auto')
-    run(1, 'LL', 'auto')
 
 def allreduce_hierarchical():
-    def run(instances, protocol, version, schedule, lower=default_lower, upper=default_upper):
-        xml = f"{home}/xmls/allreduce_hierarchical_{instances}_{protocol}_{version}_{schedule}.xml"
-        txt = f"{home}/{machine}/allreduce_{nodes}nodes/hierarchical_{instances}_{protocol}_{version}_{schedule}.txt"
+    def run(instances, protocol, schedule, lower=default_lower, upper=default_upper):
+        xml = f"{home}/xmls/allreduce_hierarchical_{instances}_{protocol}_{schedule}.xml"
+        txt = f"{home}/{machine}/allreduce_{nodes}nodes/hierarchical_{instances}_{protocol}_{schedule}.txt"
         print(f'Generating {xml} {txt}')
         if compile:
             cmd = f'python3 sccl/examples/scclang/hierarchical_allreduce_blueconnect.py {gpus_per_node} {nodes} '\
-                f'{instances} --protocol={protocol} --version={version} --schedule={schedule} --device=V100 --output={xml}'
+                f'{instances} --protocol={protocol}  --schedule={schedule} --device=V100 --output={xml}'
             print(f'$ {cmd}')
             os.system(cmd)
         mpirun('all_reduce', gpus, xml, txt, lower, upper)
 
-    # run(4, 'Simple', 'v1', 'const')
-    # run(4, 'LL128', 'v1', 'const')
-    # run(2, 'Simple', 'v1', 'const')
-    # run(2, 'LL128', 'v1', 'const')
+    # run(4, 'Simple', 'const')
+    # run(4, 'LL128',  'const')
+    # run(2, 'Simple', 'const')
+    # run(2, 'LL128',  'const')
 
-    for version in ['v1']:
-        for protocol in ['Simple', 'LL', 'LL128']:
-            for instances in [1, 2, 4]:
-                chunks = gpus * instances
-                lower = chunks * 4
-                if protocol == 'LL':
-                    upper = LL_upper
-                else:
-                    upper = default_upper
-                run(instances, protocol, version, 'const')
+    for protocol in ['Simple', 'LL', 'LL128']:
+        for instances in [1, 2, 4]:
+            chunks = gpus * instances
+            lower = chunks * 4
+            if protocol == 'LL':
+                upper = LL_upper
+            else:
+                upper = default_upper
+            run(instances, protocol, 'const', upper=upper)
 
 def allgather_hierarchical():
     def run(instances, protocol, channels, lower=default_lower, upper=default_upper):
@@ -116,13 +100,13 @@ def allgather_hierarchical():
                     upper = default_upper
                 run(instances, protocol, channels, upper=upper)
 
-def alltoall_2d():
+def alltoall_two_step():
     def run(instances, protocol, lower=default_lower, upper=default_upper):
-        xml = f"{home}/xmls/alltoall_2d_{nodes}_{instances}_{protocol}.xml"
-        txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_2d_{nodes}_{instances}_{protocol}.txt"
+        xml = f"{home}/xmls/alltoall_two_step_{nodes}_{instances}_{protocol}.xml"
+        txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_two_step_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
         if compile:
-            cmd = f'python3 sccl/examples/scclang/alltoall_a100_2d.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
+            cmd = f'python3 sccl/examples/scclang/alltoall_a100_two_step.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
             print(f'$ {cmd}')
             os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower, upper)
@@ -135,13 +119,13 @@ def alltoall_2d():
                 upper = default_upper
             run(instances, protocol, upper=upper)
 
-def alltoall_8kp1():
+def alltoall_three_step():
     def run(instances, protocol, lower=default_lower, upper=default_upper):
-        xml = f"{home}/xmls/alltoall_8kp1_{nodes}_{instances}_{protocol}.xml"
-        txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_8kp1_{nodes}_{instances}_{protocol}.txt"
+        xml = f"{home}/xmls/alltoall_three_step_{nodes}_{instances}_{protocol}.xml"
+        txt = f"{home}/{machine}/alltoall_{nodes}nodes/alltoall_three_step_{nodes}_{instances}_{protocol}.txt"
         print(f'Generating {xml} {txt}')
         if compile:
-            cmd = f'python3 sccl/examples/scclang/alltoall_a100_8kp1.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
+            cmd = f'python3 sccl/examples/scclang/alltoall_a100_three_step.py {nodes} {gpus_per_node} {instances} --protocol={protocol} --device=V100 --output={xml}'
             print(f'$ {cmd}')
             os.system(cmd)
         mpirun('alltoall', gpus, xml, txt, lower, upper)
@@ -179,9 +163,9 @@ def allreduce_nccl():
     print("Run NCCL AllReduce")
     mpirun_nccl('all_reduce', gpus, f'{home}/{machine}/allreduce_{nodes}nodes/nccl.txt')
 
-def alltoall_cuda_2d():
+def alltoall_cuda_two_step():
     print("Run CUDA Two-Step AllToAll")
-    mpirun('alltoall', gpus, None, f'{home}/{machine}/alltoall_{nodes}nodes/nccl_2d.txt', algo='2D')
+    mpirun('alltoall', gpus, None, f'{home}/{machine}/alltoall_{nodes}nodes/nccl_two_step.txt', algo='2D')
 
 def alltoall_nccl():
     print("Run NCCL AllToAll")
@@ -216,9 +200,9 @@ if __name__ == '__main__':
     alltoall_nccl()
     alltonext_nccl()
      
-    alltoall_2d()
-    alltoall_8kp1()
-    alltoall_cuda_2d()
+    alltoall_two_step()
+    alltoall_three_step()
+    alltoall_cuda_two_step()
 
     allreduce_hierarchical()
 
