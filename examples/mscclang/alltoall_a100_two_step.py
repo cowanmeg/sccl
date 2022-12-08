@@ -53,7 +53,7 @@ parser.add_argument('gpus_per_node', type=int, help ='gpus per node')
 parser.add_argument('instances', type=int, help ='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL', 'LL128'], help ='NCCL protocol. Default: Simple')
 parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
-parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
+parser.add_argument('--output', type=str, default=sys.stdout, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
 device = get_device(args.device)

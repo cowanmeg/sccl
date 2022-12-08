@@ -47,7 +47,7 @@ parser.add_argument('channels', type=int, help='number of channels per intra_nod
 parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
 parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
-parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
+parser.add_argument('--output', type=str, default=sys.stdout, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
 device = get_device(args.device)
