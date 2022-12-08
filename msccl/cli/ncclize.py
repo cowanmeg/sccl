@@ -31,16 +31,16 @@ def make_handle_ncclize(cmd_parsers):
         for algo in input_algorithms:
             if args.use_mscclang:
                 ncclized = ncclize(algo,
-                remap_scratch=args.remap_scratch,
-                channel_policy=args.channel_policy,
-                pretty_print=not args.no_pretty_print,
-                use_scratch=not args.no_scratch,
-                merge_contiguous=not args.no_merge_contiguous,
-                greedy_scratch_sorting=args.greedy_scratch_sorting,
-                instances=args.instances,
-                protocol=args.protocol,
-                instr_fusion=args.instr_fusion,
-                logging=True)
+                    remap_scratch=args.remap_scratch,
+                    channel_policy=args.channel_policy,
+                    pretty_print=not args.no_pretty_print,
+                    use_scratch=not args.no_scratch,
+                    merge_contiguous=not args.no_merge_contiguous,
+                    greedy_scratch_sorting=args.greedy_scratch_sorting,
+                    instances=args.instances,
+                    protocol=args.protocol,
+                    instr_fusion=args.instr_fusion,
+                    logging=True)
             else:
                 ncclized = ncclize(algo,
                     remap_scratch=args.remap_scratch,

@@ -11,61 +11,13 @@ from ring import *
 # Blue Connect style AllReduce https://proceedings.mlsys.org/paper/2019/file/9b8619251a19057cff70779273e95aa6-Paper.pdf
 # Assumes only two-level switches
 
-def blueconnect_allreduce_v2(num_local_gpus, num_nodes, instances, protocol, schedule, device, fname):
-    num_gpus = num_local_gpus * num_nodes
-    topology = fully_connected(num_gpus)
-    collective = AllReduce(num_gpus, num_gpus, True)
-
-
-    with MSCCLProgram("allreduce_hierarchical_v2", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=True, instr_fusion=True, device=device):
-
-        local_chunk_size = num_nodes
-        if schedule == 'auto':
-            for n in range(num_nodes):
-                ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, local_chunk_size=num_nodes)
-
-            # Cross node Reduce-Scatter
-            for g in range(num_local_gpus):
-                ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes)
-
-            # Cross node All-gather
-            for g in range(num_local_gpus):
-                ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes)
-
-
-            # All gather within each node
-            for n in range(num_nodes):
-                ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, local_chunk_size=num_nodes)
-
-
-        else:
-            for n in range(num_nodes):
-                ring_reduce_scatter(num_local_gpus, rank_offset=n * num_local_gpus, local_chunk_size=num_nodes, chan=0)
-
-            # Cross node Reduce-Scatter
-            for g in range(num_local_gpus):
-                ring_reduce_scatter(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, chan=g%2+2)
-
-            # Cross node All-gather
-            for g in range(num_local_gpus):
-                ring_all_gather(num_nodes, rank_offset=g, rank_step=num_local_gpus, chunk_offset=g*num_nodes, chan=g%2+2)
-
-
-            # # All gather within each node
-            for n in range(num_nodes):
-                ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, local_chunk_size=num_nodes, chan=1)
-
-        XML(fname)
-        Check()
-
-def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, schedule, device, fname):
+def hierarchical_allreduce(num_local_gpus, num_nodes, instances, protocol, schedule, device, fname):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     collective = AllReduce(num_gpus, num_gpus, True)
 
     threadblock_policy = ThreadblockPolicy.auto if schedule == 'auto' else ThreadblockPolicy.manual
-    with MSCCLProgram("blueconnect", topology, collective, instances, protocol=protocol, 
+    with MSCCLProgram("hierarchical_allreduce", topology, collective, instances, protocol=protocol, 
         interleaved_replication=False, threadblock_policy=threadblock_policy, device=device):
 
         local_chunk_size = num_nodes
@@ -140,53 +92,15 @@ def blueconnect_allreduce_v1(num_local_gpus, num_nodes, instances, protocol, sch
         XML(fname)
         Check()
 
-# https://arxiv.org/pdf/1807.11205.pdf
-def jia_allreduce(num_local_gpus, num_nodes, instances, protocol):
-    num_gpus = num_local_gpus * num_nodes
-    topology = fully_connected(num_gpus)
-    collective = AllReduce(num_gpus, num_nodes, True)
-
-
-    with MSCCLProgram("allreduce_hierarchical", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False):
-
-        local_chunk_size = num_nodes
-        # Reduce within each node onto local gpu 0 (master learner)
-        for n in range(num_nodes):
-            for g in range(1, num_local_gpus):
-                c = chunk(num_local_gpus*n+g, Buffer.input, 0, local_chunk_size)
-                chunk(num_local_gpus*n, Buffer.input, 0, local_chunk_size).reduce(c)
-
-        # AllReduce among master learners
-        # Cross node Reduce-Scatter
-        ring_reduce_scatter(num_nodes, rank_step=num_local_gpus)
-        # Cross node All-gather
-        ring_all_gather(num_nodes, rank_step=num_local_gpus)
-
-        # Broadcast within each node
-        for n in range(num_nodes):
-            # chunk on the master learner
-            c = chunk(num_local_gpus*n, Buffer.input, 0, local_chunk_size)
-            for g in range(1, num_local_gpus):
-                c.copy(num_local_gpus*n+g, Buffer.input, 0)
-
-        XML()
-        Check()
-
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help='number of gpus per node')
 parser.add_argument('num_nodes', type=int, help='number of nodes')
 parser.add_argument('instances', type=int, help='number of instances')
-parser.add_argument('--version',type=str, default='v1', choices=['v1', 'v2'], help='v1=count 1 v2 = count2')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
 parser.add_argument('--schedule', type=str, default='const', choices=['distribute', 'const', 'auto'], help='Scheduling')
 parser.add_argument('--device', type=str, default='None', choices=['A100', 'V100', 'None'], help='Target device')
-parser.add_argument('--output', type=str, default=None, help='File name to save xml. Default: print to stdout')
+parser.add_argument('--output', type=str, default=sys.stdout, help='File name to save xml. Default: print to stdout')
 args = parser.parse_args()
 
 device = get_device(args.device)
-
-if args.version == 'v1':
-    blueconnect_allreduce_v1(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule, device, args.output)
-elif args.version == 'v2':
-    blueconnect_allreduce_v2(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule, device, args.output)
+hierarchical_allreduce(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.schedule, device, args.output)

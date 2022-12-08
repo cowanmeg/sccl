@@ -58,12 +58,6 @@ def _get_tb_options(mapping, send, recv, channel, num_tbs):
         # if sender_ok and receiver_ok and channel_ok and (send != -1 or recv != -1):
         #      options.append(tbid)
 
-    if len(options) > 1:
-        print("send:", send, "recv:", recv, "chan", channel)
-        print(options)
-        for tbid in options:
-            print(mapping[tbid])
-        print(" ")
     return options
 
 def _create_threadblock(instr_dag, rank_tbids, rank, s, r, channel):
@@ -152,7 +146,7 @@ def priority(op):
 # (1): Sends occur before their receives
 # (2): Instruction dependencies are respected
 def topo_sort_instrs(instr_dag):
-    insert_connection_dependencies(instr_dag)
+    #insert_connection_dependencies(instr_dag)
     visited = set()
     ops = []
     ordered = []
@@ -182,30 +176,27 @@ def topo_sort_instrs(instr_dag):
     instr_dag.ordered_instrs = ordered
     # This error sometimes shows up with manual tb assignment or instruction fusion introducing a circular dependency
     assert instr_dag.num_instrs == len(ordered), \
-        f'Error TB assignment: Instructions in DAG: {instr_dag.num_instrs} vs. instructions scheduled {len(ordered)}'
+        f'Error TB assignment: Instructions: {instr_dag.num_instrs} vs. instructions scheduled {len(ordered)}'
     return ordered
 
-# TODO: Merge flow channel assignment with fusion
 def channel_assignment(instr_dag):
-    flows = []
-    flow_channels = []
+    chain_connections = []
+    chain_channels = []
 
     def all_channels():
         return set([x for x in range(32)])
     rank2sendch = [defaultdict(all_channels) for _ in range(instr_dag.num_ranks)]
     rank2recvch = [defaultdict(all_channels) for _ in range(instr_dag.num_ranks)]
 
-    # Returns a channel this flow can be scheduled on, else -1 
-    def is_matching_flow(flow):
+    # Returns a channel this chain can be scheduled on, else -1 
+    def channel_match(connections):
         # Exact match
-        if flow in flows:
-            ch = flow_channels[flows.index(flow)]
-            return flow_channels[flows.index(flow)]
-        # Check if this flow is a subset of an existing flow
-        # TODO: Why is this causing issues?
-        # for existing_flow in flows:
-        #     if flow.issubset(existing_flow):
-        #         return flow_channels[flows.index(existing_flow)]
+        if connections in chain_connections:
+            return chain_channels[chain_connections.index(connections)]
+        # Check if this chain is a subset of an existing chain
+        for existing_connections in chain_connections:
+            if connections.issubset(existing_connections):
+                return chain_channels[chain_connections.index(existing_connections)]
         # No match
         return -1
 
@@ -215,16 +206,13 @@ def channel_assignment(instr_dag):
         if ch in rank2recvch[receiver][sender]:
             rank2recvch[receiver][sender].remove(ch)
 
-    def assign_flow_channel(chain):
-        flow = chain.connection_set()
+    def assign_chain_channel(chain):
+        connections = chain.connection_set()
         user_ch = chain.ops[0].channel
-        ch = is_matching_flow(flow)
-        if ch == -1 or user_ch != ch: # No flow matched - use the smallest available channel
+        ch = channel_match(connections)
+        if ch == -1 or user_ch != ch: # No chain matched - use the smallest available channel
             possible_channels = all_channels()
-            for i in range(0, len(chain.ops)-1):
-                op = chain.ops[i]
-                sender = op.rank
-                receiver = op.send_peer()
+            for (sender, receiver) in connections:
                 possible_channels = rank2sendch[sender][receiver].intersection(rank2recvch[receiver][sender]).intersection(possible_channels)
             # If the program specified a channel try to respect it
             # Might not be possible due to valid tb-channel constraints
@@ -232,17 +220,17 @@ def channel_assignment(instr_dag):
                 ch = user_ch
             else:
                 ch = min(possible_channels)
-            flows.append(flow)
-            flow_channels.append(ch)
+            chain_connections.append(connections)
+            chain_channels.append(ch)
 
         for op in chain.ops:
             if op.is_send():
                 reserve_channel(op.rank, op.send_peer(), ch)
             op.channel = ch
 
-    # Assign channels to flows
+    # Assign channels to chains
     for chain in instr_dag.chains:
-        assign_flow_channel(chain)
+        assign_chain_channel(chain)
 
     # Assign all remaining (send, recv) to channel 0
     for send in instr_dag.sends:
@@ -251,7 +239,7 @@ def channel_assignment(instr_dag):
             send.recv_match.channel = 0
 
 # Inserts extra edges in the DAG to ensure 
-# 1. Remote buffer slots aren't blocking
+# 1. Sends don't deadlock from remote buffer slots
 # 2. Chunks sent over a channel are received in the same order
 def insert_connection_dependencies(instr_dag):
     slots = 2 if instr_dag.protocol == 'Simple' else 8
@@ -305,28 +293,28 @@ def insert_connection_dependencies(instr_dag):
 
             recv0.next.append(recv1)
             recv1.prev.add(recv0)
-    _detect_cycle(instr_dag)
+#     _detect_cycle(instr_dag)
     
 
-def _detect_cycle(instr_dag):
-    def deep_copy(s):
-        c = list()
-        for i in s:
-            c.append(i)
-        return c
+# def _detect_cycle(instr_dag):
+#     def deep_copy(s):
+#         c = list()
+#         for i in s:
+#             c.append(i)
+#         return c
 
-    def dfs(op, ops):
-        if op in ops:
-            print("CYCLE", op)
-            for o in ops:
-                print(o)
-            sys.exit()
-        else:
-            ops.append(op)
+#     def dfs(op, ops):
+#         if op in ops:
+#             print("CYCLE", op)
+#             for o in ops:
+#                 print(o)
+#             sys.exit()
+#         else:
+#             ops.append(op)
 
-        for o in op.next:
-            dfs(o, deep_copy(ops))
+#         for o in op.next:
+#             dfs(o, deep_copy(ops))
 
-    for chunk, op in instr_dag.operations.items():
-        if op.inst == Instruction.start:
-            dfs(op, list())
+#     for chunk, op in instr_dag.operations.items():
+#         if op.inst == Instruction.start:
+#             dfs(op, list())

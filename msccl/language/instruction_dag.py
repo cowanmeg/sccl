@@ -23,7 +23,8 @@ def remove_op(op):
 def same_tb(op1, op2):
     return op1.tb == op2.tb and op1.channel == op2.channel
 
-# TODO: Temporary until Runtime supports strided copy. Fusion with count > 1 can result in deadlocks and is disabled. 
+# TODO: Temporary until runtime supports strided copy. Only fuse instructions with count == 1
+# Fusion with count > 1 can result in deadlocks and is disabled. 
 def same_count(op1, op2):
     return op1.cnt() == 1 and op1.cnt() == op2.cnt()
 
@@ -37,11 +38,11 @@ class Chain:
         self.connections[send_op.rank].append((-1, send_op.recv_match.rank))
 
     # Try to fuse in another send
-    # Make certain we don't run into a situation where a->b->c and x->b->c
+    # Make certain we don't run into a situation where we have a->b->c and want to add x->b->c
     # since this can't map to our runtime constraints since it require two threadblocks on b send to c.
     # Return whether it was successful or not
     def can_add(self, send_op):
-        # send(start)---recv(mid) send(mid) ---- recv(end)
+        # send(start)---recv(mid),send(mid) ---- recv(end)
         start = self.ops[-2].rank
         mid = self.ops[-1].rank
         assert mid == send_op.rank, f"Cannot fuse a ops that starts at {mid} with instruction that starts at {send_op.rank}"
@@ -66,6 +67,7 @@ class Chain:
             if op.is_send():
                 connections.add((op.rank, op.recv_match.rank))
         return connections
+
 
 class InstructionDAG:
     def __init__(self, num_ranks, buffers, protocol):
