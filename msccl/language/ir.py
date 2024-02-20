@@ -368,14 +368,14 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                         op_elem.set('dstbuf', 'o')
                         op_elem.set('dstoff', '-1')
                 else:
-                    if op.is_send():
+                    if op.is_send() or op.is_local():
                         if op.src is not None:
-                            op_elem.set('buf', str(op.src.buffer))
-                            op_elem.set('off', str(op.src.index))
-                    else:
+                            op_elem.set('srcbuf', str(op.src.buffer))
+                            op_elem.set('srcoff', str(op.src.index))
+                    elif op.is_recv() or op.is_local():
                         if op.dst is not None:
-                            op_elem.set('buf', str(op.dst.buffer))
-                            op_elem.set('off', str(op.dst.index))
+                            op_elem.set('dstbuf', str(op.dst.buffer))
+                            op_elem.set('dstoff', str(op.dst.index))
                 if op.cnt() > 1 or old_format:
                     op_elem.set('cnt', str(op.cnt()))
                 assert len(op.depends) <= 1

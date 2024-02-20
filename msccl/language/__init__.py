@@ -23,7 +23,7 @@ def _curr():
 class MSCCLProgram:
     def __init__(self, name, topo, collective, instances, protocol='Simple', \
             threadblock_policy=ThreadblockPolicy.auto, interleaved_replication=True,
-            instr_fusion=True, check_xml=True, dependence_nop=False):
+            instr_fusion=True, check_xml=True, dependence_nop=False, old_format=True):
         self.name = name
         self.topo = topo
         self.collective = collective       
@@ -35,6 +35,7 @@ class MSCCLProgram:
         self.instr_fusion = instr_fusion
         self.check_xml = check_xml
         self.dependence_nop = dependence_nop
+        self.old_format = old_format
         assert protocol == 'Simple' or protocol == 'LL' or protocol == 'LL128', \
             f'Given protocol: {protocol}. Must be either Simple, LL, LL128'
         self.run_opt = True # Runs optimization passes
@@ -126,7 +127,7 @@ class MSCCLProgram:
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
     def generate_xml(self):
-        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop)
+        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop, old_format=self.old_format)
     
     def print_chunk_dag(self):
         visualize_chunk_dag(self.chunk_dag.chunk_paths)
