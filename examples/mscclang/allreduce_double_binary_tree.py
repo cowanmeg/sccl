@@ -29,7 +29,7 @@ def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol)
                 for step in range(num_local_gpus-1, 0, -1):
                     start = rank(n, dst+step)
                     stop = rank(n, dst+step-1)
-                    print(f'{step} {start}->{stop}')
+                    # print(f'{step} {start}->{stop}')
                     chunk(stop, Buffer.input, c, 2).reduce(chunk(start, Buffer.input, c, 2))
 
         # Double binary tree between NICs
@@ -86,24 +86,24 @@ def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, pro
         # For non-leaf gpus form a chain up to g+1
         # Post: Each GPU (n, g) has chunks (g*2, g*2+1) that are reduced within a node
         for n in range(num_nodes):
-            print("Node", n)
+            # print("Node", n)
             for dst in range(num_local_gpus):
                 for tree in range(2):
                     c = dst * 2 + tree
                     e = 1 if n % 2 == tree else 0
-                    print("Chunk", c, "Tree", tree)
+                    # print("Chunk", c, "Tree", tree)
                     for step in range(num_local_gpus-1, e, -1):
                         start = rank(n, dst+step)
                         stop = rank(n, dst+step-1)
-                        print(f'{step} {start}->{stop}')
+                        # print(f'{step} {start}->{stop}')
                         chunk(stop, Buffer.input, c).reduce(chunk(start, Buffer.input, c))
-                    print(" ")
+                    # print(" ")
 
         # Double binary tree between NICs
         for dst in range(num_local_gpus):
             for tree in range(0, 2):
                 c = dst*2 + tree
-                print(f"Tree {tree} for {c}")
+                # print(f"Tree {tree} for {c}")
                 # Reduce up tree
                 for step in range(math.floor(math.log2(num_nodes))):
                     distance = 2 ** (step+1)
@@ -112,14 +112,14 @@ def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, pro
                     for i in range(0, num_nodes//distance):
                         child = (2 ** step) - tree + i * distance
                         parent = (2**(step+1) + distance*(i//2) - tree) % num_nodes
-                        print(f"{child},{dst}->{parent},{dst+1}")
+                        # print(f"{child},{dst}->{parent},{dst+1}")
                         chunk(rank(parent, dst+1), Buffer.input, c).reduce((chunk(rank(child, dst), Buffer.input, c)))
                     # Finish off the chain
                     for i in range(0, num_nodes//distance, distance):
                         parent = (2**(step+1) + distance*(i//2) - tree) % num_nodes
-                        print(f"{parent},{dst+1}->{parent},{dst}")
+                        # print(f"{parent},{dst+1}->{parent},{dst}")
                         chunk(rank(parent, dst), Buffer.input, c).reduce((chunk(rank(parent, dst+1), Buffer.input, c)))
-                print("down")
+                # print("down")
 
                 # Copy down tree
                 for step in range(math.floor(math.log2(num_nodes))-1, -1, -1):
@@ -128,13 +128,13 @@ def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, pro
                     # print(f"Step {step} starts at {start}")
                     for i in range(0, num_nodes//distance, 2):
                         parent = (2**(step+1) + distance*(i//2) - tree) % num_nodes
-                        print(f"{parent},{dst}->{parent},{dst+1}")
+                        # print(f"{parent},{dst}->{parent},{dst+1}")
                         chunk(rank(parent, dst), Buffer.input, c).copy(rank(parent, dst+1), Buffer.input, c)
 
                     for i in range(0, num_nodes//distance):
                         child = (2 ** step) - tree + i * distance
                         parent = (2**(step+1) + distance*(i//2) - tree) % num_nodes
-                        print(f"{parent},{dst+1}->{child},{dst}")
+                        # print(f"{parent},{dst+1}->{child},{dst}")
                         chunk(rank(parent, dst+1), Buffer.input, c).copy(rank(child, dst), Buffer.input, c)
 
         for n in range(num_nodes):
@@ -146,8 +146,8 @@ def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, pro
                         start = rank(n, (dst+step)%num_local_gpus)
                         stop = rank(n, (dst+step+1)%num_local_gpus)
                         chunk(start, Buffer.input, c).copy(stop, Buffer.input, c)
-                        print(f"{start}->{stop}")
-                    print("")
+                        # print(f"{start}->{stop}")
+                    # print("")
 
         XML()
         Check()
@@ -156,7 +156,12 @@ def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, pro
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help='number of gpus per node')
 parser.add_argument('num_nodes', type=int, help='number of nodes')
-parser.add_argument('instances', type=int, help='number of instances')
+# parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
+parser.add_argument('--version', type=str, default='normal', choices=['normal', 'split'], help='Tree implementation')
+
 args = parser.parse_args()
-double_binary_tree_allreduce_split(args.num_gpus, args.num_nodes, args.instances, args.protocol)
+if args.version == 'split':
+    double_binary_tree_allreduce_split(args.num_gpus, args.num_nodes, 1, args.protocol)
+else:
+    double_binary_tree_allreduce(args.num_gpus, args.num_nodes, 1, args.protocol)
