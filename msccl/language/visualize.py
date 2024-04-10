@@ -51,29 +51,27 @@ def visualize_msccl_ir(program, dot_file):
     global num
     num = 0
     dot = gz.Digraph('MSCCL-IR')
-    for i, gpu in enumerate(program.gpus):
-        for j, tb in enumerate(gpu.threadblocks):
-            for op in tb.ops:
-                opcode = getOpcode(op)
-                op.dot_node = str(num)
-                dot.node(str(num), label=f'{opcode} rank:{op.rank} chunk:{op.src.index}')
-                num += 1
 
     for i, gpu in enumerate(program.gpus):
+        print(f"gpu {i}")
         with dot.subgraph(name=f'cluster_{i}') as gpu_sub:
             gpu_sub.attr(label=f'GPU {i}')
             gpu_sub.attr(style='filled', color='lightgrey')
             for j, tb in enumerate(gpu.threadblocks):
+                print(f"gpu {i}, threadblock {j}")
                 with gpu_sub.subgraph(name=f'cluster_{i}{j}') as tb_sub:
                     tb_sub.attr(label=f'TB {j}')
                     tb_sub.attr(style='filled', color='white')
-                    for i, op in enumerate(tb.ops):
+                    for k, op in enumerate(tb.ops):
                         opcode = getOpcode(op)
                         op.dot_node = str(num)
                         dot.node(str(num), label=f'{opcode} chunk:{op.src.index}')
-                        if (i < len(tb.ops)-1):
+                        if (k < len(tb.ops)-1):
                             tb_sub.edge(str(num), str(num+1))
                         num += 1
+                    
+                        # if (i < len(tb.ops)-1):
+                        #     tb_sub.edge(str(num), str(num+1))
     for i, gpu in enumerate(program.gpus):
         for j, tb in enumerate(gpu.threadblocks):
             for op in tb.ops:
