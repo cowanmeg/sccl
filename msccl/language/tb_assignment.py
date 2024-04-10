@@ -6,7 +6,7 @@ from enum import Enum
 import heapq
 
 from msccl.language.ir import *
-from msccl.language.rank_dag import *
+from msccl.language.instruction_dag import *
 
 
 def _verify_tb_op_compatible(tb, op):

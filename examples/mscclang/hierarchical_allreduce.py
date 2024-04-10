@@ -74,6 +74,8 @@ def hierarchical_allreduce(num_local_gpus, num_nodes, instances, protocol, sched
                     ring_all_gather(num_local_gpus, rank_offset=n * num_local_gpus, chunk_offset=offset, chunk_stride=num_nodes, chan=offset+num_nodes)
 
         XML()
+        GenerateInstrDAG("hier_allreduce_instr_dag.dot")
+        GenerateMSCCLIRDAG("hier_allreduce_msccl_ir.dot")
         Check()
 
 parser = argparse.ArgumentParser()

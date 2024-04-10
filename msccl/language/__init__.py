@@ -9,9 +9,9 @@ from msccl.language.passes import *
 from msccl.language.tb_assignment import *
 from msccl.language.chunk import *
 from msccl.language.buffer import *
-from msccl.language.rank_dag import *
+from msccl.language.instruction_dag import *
 import msccl.collectives as collectives
-# from msccl.language.visualize import *
+from msccl.language.visualize import *
 
 _current_program = None
 def _curr():
@@ -126,21 +126,19 @@ class MSCCLProgram:
             check_threadblock_ordering(self.instr_dag)
         return Program(self.name, self.collective.name, self.collective.inplace, self.protocol, gpu_prgms)  
 
-    def generate_xml(self):
-        return ir_to_xml(self.lower(), dependence_nop=self.dependence_nop, old_format=self.old_format)
+    def generate_xml(self, fname):
+        self.program = self.lower()
+        ir_to_xml(self.program, fname=fname, dependence_nop=self.dependence_nop)
     
-    def print_chunk_dag(self):
-        visualize_chunk_dag(self.chunk_dag.chunk_paths)
+    # def print_chunk_dag(self):
+    #     visualize_chunk_dag(self.chunk_dag.chunk_paths)
 
-    def print_instr_dags(self, rank):
-        if rank == 0:
-            for r in range(len(self.ranks)):
-                visualize_instr_dag(self.instr_dags[r].operations)
-        else:
-            visualize_instr_dag(self.instr_dags[rank].operations)
+    def print_instr_dags(self, fname):
+        visualize_instr_dag(self.program, fname)
 
-def Print():
-    _curr().print_chunk_dag()
+    def print_msccl_ir(self, fname):
+        visualize_msccl_ir(self.program, fname)
+
 
 def chunk(rank, buffer, index, size=1):
     if _curr().buffers[rank][buffer][index] is None:
@@ -150,11 +148,17 @@ def chunk(rank, buffer, index, size=1):
 def create_scratch(rank, name):
     return _curr().create_scratch(rank, name)
 
-def XML():
-   print(_curr().generate_xml())
+def XML(fname=sys.stdout):
+    _curr().generate_xml(fname)
 
 def Check():
     return _curr().check()
+
+def GenerateInstrDAG(fname='instr_dag.dot'):
+    _curr().print_instr_dags(fname)
+
+def GenerateMSCCLIRDAG(fname='msccl_ir.dot'):
+    _curr().print_msccl_ir(fname)
 
 @dataclass
 class Ref(ChunkRef):

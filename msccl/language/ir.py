@@ -1,6 +1,7 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 
+import sys
 from lxml import etree as ET
 from dataclasses import dataclass, field
 from enum import Enum
@@ -117,6 +118,7 @@ class Op:
     src: ChunkRef
     dst: ChunkRef
     depends: list = field(default_factory=list)
+    cross_tb_depends: list = field(default_factory=list)
     step: int = -1 # Step in the TB
     tb: int = -1 # TB this op is assigned to
     prev: list = field(default_factory=list) # List of instructions that happen before
@@ -208,7 +210,8 @@ _local_dst_insts = {Instruction.recv, Instruction.recv_copy_send, Instruction.re
                     Instruction.recv_reduce_copy_send}
 
 
-def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, dependence_nop=False):
+def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=True, 
+              dependence_nop=False, fname=sys.stdout):
     # Figure out sizes of buffers based on usage
     buffer_sizes = defaultdict(lambda: 0)
     for gpu in program.gpus:
@@ -241,7 +244,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
             for op in tb.ops:
-                op.depends = list(
+                op.cross_tb_depends = list(
                     filter(lambda dep: op_tb_id[dep] != tb_id[tb], op.depends))
     # Filter out redundant dependencies
     # e.g. if op1 and op2 depend on op, and op1 happends before op2 
@@ -250,16 +253,16 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
         for tb in gpu.threadblocks:
             running_depends = []
             for op in tb.ops:
-                op.depends = list(
-                    filter(lambda dep: dep not in running_depends, op.depends))
-                running_depends = running_depends + op.depends
+                op.cross_tb_depends = list(
+                    filter(lambda dep: dep not in running_depends, op.cross_tb_depends))
+                running_depends = running_depends + op.cross_tb_depends
 
     # Mark all ops that have a dependence on them
     has_dependence = set()
     for gpu in program.gpus:
         for tb in gpu.threadblocks:
             for op in tb.ops:
-                has_dependence.update(op.depends)
+                has_dependence.update(op.cross_tb_depends)
 
     if dependence_nop:
         for gpu in program.gpus:
@@ -270,15 +273,15 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                 first_dep = None
                 for i, op in enumerate(tb.ops):
                     # Expand extra dependencies into nop operations
-                    num_depends = len(op.depends)
+                    num_depends = len(op.cross_tb_depends)
                     if op.inst is Instruction.reduce:
                         if num_depends > 0:
-                            for dep in op.depends:
+                            for dep in op.cross_tb_depends:
                                 if first_dep is None:
                                     first_dep = dep
                                 else:    
                                     pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
-                            op.depends = []
+                            op.cross_tb_depends = []
                         if first_re is None:
                             first_re = op
 
@@ -287,7 +290,7 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     else:
                         pre_ops.append(op)
                 if first_dep is not None:
-                    first_re.depends = [first_dep]
+                    first_re.cross_tb_depends = [first_dep]
                 tb.ops = pre_ops + after_ops
 
     # Do some additional postprocessing of operations:
@@ -299,9 +302,9 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
             new_ops = []
             for op in tb.ops:
                 # Expand extra dependencies into nop operations
-                if len(op.depends) > 1:
-                    extra_deps = op.depends[1:]
-                    op.depends = op.depends[:1]
+                if len(op.cross_tb_depends) > 1:
+                    extra_deps = op.cross_tb_depends[1:]
+                    op.cross_tb_depends = op.cross_tb_depends[:1]
                     for i, dep in enumerate(extra_deps):
                         new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
                         op_idx[new_ops[-1]] = len(new_ops) - 1
@@ -378,10 +381,10 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                             op_elem.set('dstoff', str(op.dst.index))
                 if op.cnt() > 1 or old_format:
                     op_elem.set('cnt', str(op.cnt()))
-                assert len(op.depends) <= 1
-                if len(op.depends) == 1:
-                    op_elem.set('depid', str(op_tb_id[op.depends[0]]))
-                    op_elem.set('deps', str(op_idx[op.depends[0]]))
+                assert len(op.cross_tb_depends) <= 1
+                if len(op.cross_tb_depends) == 1:
+                    op_elem.set('depid', str(op_tb_id[op.cross_tb_depends[0]]))
+                    op_elem.set('deps', str(op_idx[op.cross_tb_depends[0]]))
                 elif old_format:
                     op_elem.set('depid', '-1')
                     op_elem.set('deps', '-1')
@@ -392,4 +395,12 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
 
     if pretty_print:
         ET.indent(algo_elem, space='  ')
+    
+    tree = ET.ElementTree(algo_elem)
+    if fname is sys.stdout:
+        tree.write(sys.stdout.buffer)
+    elif fname is not None:
+        with open(fname, 'wb') as f:
+            tree.write(f)
+    # Note: autosynth and ncclize require this
     return ET.tostring(algo_elem, encoding='unicode')
