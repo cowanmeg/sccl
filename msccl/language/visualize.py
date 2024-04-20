@@ -42,7 +42,7 @@ def visualize_instr_dag(program, dot_file):
                 if op.is_send():
                     dot.edge(op.dot_node, op.recv_match.dot_node, style='dotted')
                 for dop in op.depends:
-                    dot.edge(op.dot_node, dop.dot_node)
+                    dot.edge(dop.dot_node, op.dot_node)
     with open(dot_file, 'w') as file:
         file.write(dot.source)
 
@@ -53,29 +53,27 @@ def visualize_msccl_ir(program, dot_file):
     dot = gz.Digraph('MSCCL-IR')
 
     for i, gpu in enumerate(program.gpus):
-        print(f"gpu {i}")
-        with dot.subgraph(name=f'cluster_{i}') as gpu_sub:
+        with dot.subgraph(name=f'cluster_gpu{i}') as gpu_sub:
             gpu_sub.attr(label=f'GPU {i}')
             gpu_sub.attr(style='filled', color='lightgrey')
             for j, tb in enumerate(gpu.threadblocks):
-                print(f"gpu {i}, threadblock {j}")
-                with gpu_sub.subgraph(name=f'cluster_{i}{j}') as tb_sub:
+                with gpu_sub.subgraph(name=f'cluster_tb{i}{j}') as tb_sub:
                     tb_sub.attr(label=f'TB {j}')
                     tb_sub.attr(style='filled', color='white')
                     for k, op in enumerate(tb.ops):
                         opcode = getOpcode(op)
                         op.dot_node = str(num)
-                        dot.node(str(num), label=f'{opcode} chunk:{op.src.index}')
-                        if (k < len(tb.ops)-1):
-                            tb_sub.edge(str(num), str(num+1))
+                        tb_sub.node(str(num), label=f'{opcode} chunk:{op.src.index}')
+                        # fake formatting edge
+                        if (k > 0):
+                            tb_sub.edge(str(num-1), str(num), color='white')
                         num += 1
-                    
-                        # if (i < len(tb.ops)-1):
-                        #     tb_sub.edge(str(num), str(num+1))
     for i, gpu in enumerate(program.gpus):
         for j, tb in enumerate(gpu.threadblocks):
             for op in tb.ops:
                 if op.is_send():
                     dot.edge(op.dot_node, op.recv_match.dot_node, style='dotted')
+                for dop in op.cross_tb_depends:
+                    dot.edge(dop.dot_node, op.dot_node)
     with open(dot_file, 'w') as file:
         file.write(dot.source)

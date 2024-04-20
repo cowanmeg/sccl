@@ -31,7 +31,7 @@ def hierarchical_allreduce(num_local_gpus, num_nodes, instances, protocol, sched
     collective = AllReduce(num_gpus, num_gpus, True)
 
     with MSCCLProgram("hierarchical_allreduce", topology, collective, instances, protocol=protocol, 
-        interleaved_replication=False):
+        interleaved_replication=False, instr_fusion=False):
 
         local_chunk_size = num_nodes
         if schedule == 'auto':
