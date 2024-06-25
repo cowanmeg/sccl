@@ -14,7 +14,7 @@ def allgather_ring(size, channels, instances, protocol, fname):
     topology = fully_connected(size)
     collective = AllGather(size, 1, True)
     with MSCCLProgram(f"allgather_ring_{channels}channelsperring", topology, collective, instances,
-         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual, old_format=False, instr_fusion=False):
+         protocol=protocol, threadblock_policy=ThreadblockPolicy.manual, old_format=False, instr_fusion=True):
         for step in range(0, size-1):
             for index in range(0, size):
                 rank = (index + step) % size

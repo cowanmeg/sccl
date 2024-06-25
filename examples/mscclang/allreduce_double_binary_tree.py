@@ -9,7 +9,7 @@ from msccl.language.collectives import AllReduce
 
 
 # See https://github.com/NVIDIA/nccl/issues/545
-def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol):
+def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol, fname):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     num_chunks = 2 * num_local_gpus # TODO: should be nics per node * 2, this assumes each local gpu has a nic.
@@ -67,10 +67,10 @@ def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol)
                     stop = rank(n, dst+step+1)
                     chunk(start, Buffer.input, c, 2).copy(stop, Buffer.input, c, 2)
 
-        XML()
+        XML(fname)
         Check()
 
-def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, protocol):
+def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, protocol, fname):
     num_gpus = num_local_gpus * num_nodes
     topology = fully_connected(num_gpus)
     num_chunks = 2 * num_local_gpus # TODO: should be nics per node * 2, this assumes each local gpu has a nic.
@@ -149,19 +149,20 @@ def double_binary_tree_allreduce_split(num_local_gpus, num_nodes, instances, pro
                         # print(f"{start}->{stop}")
                     # print("")
 
-        XML()
+        XML(fname)
         Check()
 
 
 parser = argparse.ArgumentParser()
 parser.add_argument('num_gpus', type=int, help='number of gpus per node')
 parser.add_argument('num_nodes', type=int, help='number of nodes')
-# parser.add_argument('instances', type=int, help='number of instances')
+parser.add_argument('instances', type=int, help='number of instances')
 parser.add_argument('--protocol', type=str, default='Simple', choices=['Simple', 'LL128', 'LL'], help='Protocol')
 parser.add_argument('--version', type=str, default='normal', choices=['normal', 'split'], help='Tree implementation')
+parser.add_argument('--fname', type=str, default='', help='Name of output file <name>.xml. Default: print to stdout')
 
 args = parser.parse_args()
 if args.version == 'split':
-    double_binary_tree_allreduce_split(args.num_gpus, args.num_nodes, 1, args.protocol)
+    double_binary_tree_allreduce_split(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.fname)
 else:
-    double_binary_tree_allreduce(args.num_gpus, args.num_nodes, 1, args.protocol)
+    double_binary_tree_allreduce(args.num_gpus, args.num_nodes, args.instances, args.protocol, args.fname)
