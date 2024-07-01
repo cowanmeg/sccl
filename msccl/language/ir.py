@@ -279,8 +279,10 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                             for dep in op.cross_tb_depends:
                                 if first_dep is None:
                                     first_dep = dep
-                                else:    
-                                    pre_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                                else:
+                                    nop = Op(Instruction.nop, -1, None, None, [])
+                                    nop.cross_tb_depends = [dep]
+                                    pre_ops.append(nop)
                             op.cross_tb_depends = []
                         if first_re is None:
                             first_re = op
@@ -306,9 +308,11 @@ def ir_to_xml(program: Program, old_format=True, use_scratch=True, pretty_print=
                     extra_deps = op.cross_tb_depends[1:]
                     op.cross_tb_depends = op.cross_tb_depends[:1]
                     for i, dep in enumerate(extra_deps):
-                        new_ops.append(Op(Instruction.nop, -1, None, None, [dep]))
+                        nop = Op(Instruction.nop, -1, None, None, [])
+                        nop.cross_tb_depends = [dep]
+                        new_ops.append(nop)
                         op_idx[new_ops[-1]] = len(new_ops) - 1
-                        #op_tb_id[new_ops[-1]] = op_tb_id[op]
+                        op_tb_id[new_ops[-1]] = op_tb_id[op]
                 new_ops.append(op)
                 op_idx[new_ops[-1]] = len(new_ops) - 1
             tb.ops = new_ops

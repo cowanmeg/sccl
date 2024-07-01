@@ -29,7 +29,8 @@ def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol,
                 for step in range(num_local_gpus-1, 0, -1):
                     start = rank(n, dst+step)
                     stop = rank(n, dst+step-1)
-                    # print(f'{step} {start}->{stop}')
+                    # if c == 0:
+                    #     print(f'Chain RRC {start}->{stop}')
                     chunk(stop, Buffer.input, c, 2).reduce(chunk(start, Buffer.input, c, 2))
 
         # Double binary tree between NICs
@@ -45,7 +46,8 @@ def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol,
                     for i in range(0, num_nodes//distance):
                         child = (2 ** step) - tree + i * distance
                         parent = 2**(step+1) + distance*(i//2) - tree
-                        # print(f"{child}->{parent}")
+                        # if c == 0:
+                        #     print(f"Tree RRC {rank(child, dst)}->{rank(parent, dst)}")
                         chunk(rank(parent, dst), Buffer.input, c).reduce((chunk(rank(child, dst), Buffer.input, c)))
 
                 # copy down tree
@@ -56,7 +58,8 @@ def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol,
                     for i in range(0, num_nodes//distance):
                         child = (2 ** step) - tree + i * distance
                         parent = 2**(step+1) + distance*(i//2) - tree
-                        # print(f"{parent}->{child}")
+                        # if c == 0:
+                        #     print(f"TREE R {rank(parent, dst)}->{rank(child, dst)}")
                         chunk(rank(parent, dst), Buffer.input, c).copy(rank(child, dst), Buffer.input, c)
 
         for n in range(num_nodes):
@@ -65,6 +68,8 @@ def double_binary_tree_allreduce(num_local_gpus, num_nodes, instances, protocol,
                 for step in range(num_local_gpus-1):
                     start = rank(n, dst+step)
                     stop = rank(n, dst+step+1)
+                    # if c == 0:
+                    #     print(f'CHAIN R {start}->{stop}')
                     chunk(start, Buffer.input, c, 2).copy(stop, Buffer.input, c, 2)
 
         XML(fname)
